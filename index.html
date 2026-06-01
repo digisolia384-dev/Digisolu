@@ -850,12 +850,23 @@ select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='ht
 .pay-submitted p{color:#8A8480;font-size:.9rem;margin-bottom:20px}
 .ref-display{background:#1E1C1A;border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:14px;font-family:'Courier New',monospace;font-size:1rem;color:#E8730C;text-align:center;letter-spacing:.1em;margin-bottom:16px}
 
+/* Mobile admin nav */
+.adm-mobile-nav{display:none;position:fixed;bottom:0;left:0;right:0;background:#0D1117;border-top:1px solid rgba(255,255,255,0.08);z-index:1000;overflow-x:auto;white-space:nowrap;padding:0;-webkit-overflow-scrolling:touch}
+.adm-mni{display:inline-flex;flex-direction:column;align-items:center;gap:3px;padding:8px 10px;background:none;border:none;color:#64748B;font-size:.58rem;font-weight:600;cursor:pointer;min-width:60px;white-space:nowrap;transition:color .15s}
+.adm-mni span{font-size:.58rem;line-height:1}
+.adm-mni:first-child{font-size:.9rem}
+.adm-mni .adm-ni-ico,.adm-mni>:first-child{font-size:.95rem}
+.adm-mni.active{color:#E8730C}
+.adm-mni:hover{color:#CBD5E1}
 @media(max-width:900px){
   .adm-sb{display:none}
+  .adm-mobile-nav{display:flex;justify-content:flex-start}
+  .adm-main{padding-bottom:70px}
   .adm-kpi-grid{grid-template-columns:1fr 1fr}
   .adm-grid2{grid-template-columns:1fr}
   .plan-grid{grid-template-columns:1fr 1fr}
   .merch-detail-grid{grid-template-columns:1fr}
+  #page-admin{flex-direction:column}
 }
 @media(max-width:600px){
   .adm-kpi-grid{grid-template-columns:1fr 1fr}
@@ -1983,6 +1994,7 @@ async function _fbSyncAll(data) {
       <button class="adm-ni active" onclick="adminSection('overview')" data-as="overview"><span class="adm-ni-ico">📊</span> Vue d'ensemble</button>
       <button class="adm-ni" onclick="adminSection('merchants')" data-as="merchants"><span class="adm-ni-ico">🏪</span> Commerces</button>
       <button class="adm-ni" onclick="adminSection('payments')" data-as="payments"><span class="adm-ni-ico">💳</span> Paiements <span id="adm-pay-badge" style="background:#E74C3C;color:white;font-size:.6rem;padding:1px 5px;border-radius:100px;margin-left:4px;display:none">0</span></button>
+      <button class="adm-ni" onclick="adminSection('subscriptions')" data-as="subscriptions"><span class="adm-ni-ico">🔑</span> Abonnements <span id="adm-sub-badge" style="background:#E8730C;color:white;font-size:.6rem;padding:1px 5px;border-radius:100px;margin-left:4px;display:none">0</span></button>
       <button class="adm-ni" onclick="adminSection('plans')" data-as="plans"><span class="adm-ni-ico">📦</span> Plans & Tarifs</button>
       <button class="adm-ni" onclick="adminSection('config')" data-as="config"><span class="adm-ni-ico">⚙️</span> Configuration</button>
       <button class="adm-ni" onclick="adminSection('developer')" data-as="developer"><span class="adm-ni-ico">🔥</span> Développeur</button>
@@ -1992,6 +2004,18 @@ async function _fbSyncAll(data) {
       <div class="adm-foot-info">Session admin active</div>
       <button class="adm-logout" onclick="adminLogout()">⏻ Déconnexion admin</button>
     </div>
+  </div>
+
+  <!-- MOBILE ADMIN NAV -->
+  <div class="adm-mobile-nav" id="adm-mobile-nav">
+    <button class="adm-mni" onclick="adminSection('overview')" data-as="overview">📊<span>Accueil</span></button>
+    <button class="adm-mni" onclick="adminSection('merchants')" data-as="merchants">🏪<span>Commerces</span></button>
+    <button class="adm-mni" onclick="adminSection('payments')" data-as="payments">💳<span>Paiements</span></button>
+    <button class="adm-mni" onclick="adminSection('subscriptions')" data-as="subscriptions">🔑<span>Abonnements</span></button>
+    <button class="adm-mni" onclick="adminSection('plans')" data-as="plans">📦<span>Plans</span></button>
+    <button class="adm-mni" onclick="adminSection('config')" data-as="config">⚙️<span>Config</span></button>
+    <button class="adm-mni" onclick="adminSection('developer')" data-as="developer">🔥<span>Dev</span></button>
+    <button class="adm-mni" onclick="adminSection('activity')" data-as="activity">📋<span>Activité</span></button>
   </div>
 
   <!-- MAIN -->
@@ -2484,6 +2508,72 @@ alter table payments  enable row level security;</pre>
           </div>
         </div>
       </div>
+    </div>
+
+
+    <!-- ABONNEMENTS -->
+    <div id="as-subscriptions" class="adm-section">
+
+      <!-- KPIs rapides -->
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px" id="sub-kpi-grid"></div>
+
+      <!-- Filtres + recherche -->
+      <div class="adm-card" style="margin-bottom:14px">
+        <div class="adm-card-body" style="padding:14px 16px">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+            <input id="sub-srch" style="flex:1;min-width:180px;background:#0D1117;border:1px solid rgba(255,255,255,0.08);border-radius:7px;color:#E2E8F0;padding:9px 12px;font-size:.83rem" placeholder="🔍 Commerce, propriétaire..."/>
+            <select id="sub-filter-status" onchange="renderSubscriptions()" style="background:#0D1117;border:1px solid rgba(255,255,255,0.08);border-radius:7px;color:#E2E8F0;padding:9px 12px;font-size:.82rem">
+              <option value="">Tous statuts</option>
+              <option value="active">Actifs</option>
+              <option value="expired">Expirés</option>
+              <option value="suspended">Suspendus</option>
+              <option value="grace">Période de grâce</option>
+            </select>
+            <select id="sub-filter-plan" onchange="renderSubscriptions()" style="background:#0D1117;border:1px solid rgba(255,255,255,0.08);border-radius:7px;color:#E2E8F0;padding:9px 12px;font-size:.82rem">
+              <option value="">Tous les plans</option>
+              <option value="mensuel">Mensuel (30j)</option>
+              <option value="trimestriel">Trimestriel (90j)</option>
+              <option value="annuel">Annuel (365j)</option>
+              <option value="essai">Essai (7j)</option>
+            </select>
+            <button class="btn-g sm" onclick="renderSubscriptions()" style="white-space:nowrap">🔄 Actualiser</button>
+            <button class="btn-p sm" onclick="exportSubsCSV()" style="white-space:nowrap">⬇️ CSV</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tableau abonnements -->
+      <div class="adm-card" style="margin-bottom:14px">
+        <div class="adm-card-hdr">
+          <h3>🔑 Gestion des abonnements</h3>
+          <span id="sub-count-label" style="font-size:.75rem;color:#475569">0 commerce(s)</span>
+        </div>
+        <div class="adm-card-body" style="overflow-x:auto;padding:0">
+          <table class="adm-table" style="width:100%;font-size:.82rem">
+            <thead>
+              <tr>
+                <th>Commerce</th>
+                <th>Plan</th>
+                <th>Statut</th>
+                <th>Début</th>
+                <th>Expiration</th>
+                <th>Jours restants</th>
+                <th>Actions rapides</th>
+              </tr>
+            </thead>
+            <tbody id="sub-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Expirations imminentes -->
+      <div class="adm-card">
+        <div class="adm-card-hdr"><h3>⏰ Expirations dans les 7 prochains jours</h3></div>
+        <div class="adm-card-body" style="padding:14px 16px" id="sub-expiring-soon">
+          <p style="color:#475569;font-size:.82rem">Aucune expiration imminente.</p>
+        </div>
+      </div>
+
     </div>
 
     <!-- ACTIVITY -->
@@ -4898,11 +4988,12 @@ let currentPayFilter = 'pending';
 function adminSection(name){
   document.querySelectorAll('.adm-section').forEach(s=>s.classList.remove('active'));
   document.querySelectorAll('.adm-ni').forEach(n=>n.classList.remove('active'));
+  document.querySelectorAll('.adm-mni').forEach(n=>n.classList.remove('active'));
   document.getElementById('as-'+name)?.classList.add('active');
-  document.querySelector('[data-as="'+name+'"]')?.classList.add('active');
-  const titles={overview:'Vue d\'ensemble',merchants:'Gestion des commerces',payments:'Demandes de paiement',plans:'Plans & Tarifs',config:'Configuration',developer:'Développeur — Supabase',activity:'Journal d\'activité'};
+  document.querySelectorAll('[data-as="'+name+'"]').forEach(el=>el.classList.add('active'));
+  const titles={overview:'Vue d\'ensemble',merchants:'Gestion des commerces',payments:'Demandes de paiement',subscriptions:'Gestion des abonnements',plans:'Plans & Tarifs',config:'Configuration',developer:'Développeur — Supabase',activity:'Journal d\'activité'};
   document.getElementById('adm-title').textContent = titles[name]||name;
-  const renders={overview:renderAdminOverview,merchants:renderAdminMerchants,payments:renderAdminPayments,plans:renderAdminPlans,config:renderAdminConfig,developer:renderAdminDeveloper,activity:renderAdminActivity};
+  const renders={overview:renderAdminOverview,merchants:renderAdminMerchants,payments:renderAdminPayments,subscriptions:renderSubscriptions,plans:renderAdminPlans,config:renderAdminConfig,developer:renderAdminDeveloper,activity:renderAdminActivity};
   renders[name]?.();
 }
 
@@ -9220,6 +9311,514 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }, 3000);
 });
+
+
+
+// ============================================================
+// ★ GESTION DES ABONNEMENTS — Module Admin Développeur
+// ============================================================
+
+const PLANS = {
+  essai:        { label: 'Essai',        days: 7,   prix: 0,      color: '#64748B', badge: '🆓' },
+  mensuel:      { label: 'Mensuel',      days: 30,  prix: 2500,   color: '#3B82F6', badge: '📅' },
+  trimestriel:  { label: 'Trimestriel',  days: 90,  prix: 6500,   color: '#8B5CF6', badge: '📆' },
+  annuel:       { label: 'Annuel',       days: 365, prix: 22000,  color: '#E8730C', badge: '🏆' },
+};
+
+// ── Helpers ──────────────────────────────────────────────────
+function _subKey(mid) { return 'ds_sub_' + mid; }
+
+function getSub(mid) {
+  try { return JSON.parse(localStorage.getItem(_subKey(mid)) || 'null'); } catch { return null; }
+}
+
+function saveSub(mid, sub) {
+  localStorage.setItem(_subKey(mid), JSON.stringify(sub));
+}
+
+function subDaysLeft(sub) {
+  if (!sub || !sub.expires_at) return 0;
+  return Math.max(0, Math.ceil((new Date(sub.expires_at) - new Date()) / 86400000));
+}
+
+function subStatus(sub) {
+  if (!sub) return 'none';
+  if (sub.status === 'suspended') return 'suspended';
+  const days = subDaysLeft(sub);
+  if (days > 3) return 'active';
+  if (days > 0) return 'grace';
+  return 'expired';
+}
+
+function subStatusBadge(sub) {
+  const s = subStatus(sub);
+  const map = {
+    none:      { label: 'Aucun',          bg: 'rgba(100,116,139,.2)', color: '#94A3B8' },
+    active:    { label: '✅ Actif',        bg: 'rgba(46,204,113,.15)', color: '#2ECC71' },
+    grace:     { label: '⚠️ Grâce',       bg: 'rgba(243,156,18,.15)', color: '#F39C12' },
+    expired:   { label: '❌ Expiré',       bg: 'rgba(231,76,60,.15)',  color: '#E74C3C' },
+    suspended: { label: '🚫 Suspendu',    bg: 'rgba(148,163,184,.1)', color: '#94A3B8' },
+  };
+  const m = map[s] || map.none;
+  return `<span style="background:${m.bg};color:${m.color};border-radius:100px;padding:3px 9px;font-size:.72rem;font-weight:700;white-space:nowrap">${m.label}</span>`;
+}
+
+function fmtDate(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleDateString('fr-FR', { day:'2-digit', month:'short', year:'numeric' });
+}
+
+// ── Initialiser l'abonnement d'un marchand (essai par défaut) ─
+function initSubIfNone(mid) {
+  if (getSub(mid)) return;
+  const now = new Date();
+  const exp = new Date(now); exp.setDate(exp.getDate() + 7);
+  saveSub(mid, {
+    plan: 'essai', status: 'active',
+    started_at: now.toISOString(), expires_at: exp.toISOString(),
+    history: [{ action: 'create', plan: 'essai', at: now.toISOString(), note: 'Création compte' }]
+  });
+}
+
+// ── Activer / renouveler un abonnement ────────────────────────
+function activateSub(mid, plan, note) {
+  const planDef = PLANS[plan]; if (!planDef) return;
+  const sub = getSub(mid) || {};
+  const now = new Date();
+
+  // Prolongement : si déjà actif, partir de la date d'expiration actuelle
+  let base = now;
+  if (sub.status !== 'suspended' && sub.expires_at && new Date(sub.expires_at) > now) {
+    base = new Date(sub.expires_at);
+  }
+  const exp = new Date(base); exp.setDate(base.getDate() + planDef.days);
+
+  const hist = sub.history || [];
+  hist.unshift({ action: 'activate', plan, at: now.toISOString(), note: note || ('Activation ' + planDef.label), days: planDef.days, expires_at: exp.toISOString() });
+
+  saveSub(mid, {
+    plan, status: 'active',
+    started_at: now.toISOString(), expires_at: exp.toISOString(),
+    history: hist.slice(0, 50)
+  });
+}
+
+// ── Suspendre ─────────────────────────────────────────────────
+function suspendSub(mid, note) {
+  const sub = getSub(mid); if (!sub) return;
+  sub.status = 'suspended';
+  sub.suspended_at = new Date().toISOString();
+  const hist = sub.history || [];
+  hist.unshift({ action: 'suspend', at: new Date().toISOString(), note: note || 'Suspension manuelle' });
+  sub.history = hist.slice(0, 50);
+  saveSub(mid, sub);
+}
+
+// ── Lever la suspension ────────────────────────────────────────
+function unsuspendSub(mid, note) {
+  const sub = getSub(mid); if (!sub) return;
+  sub.status = 'active';
+  sub.suspended_at = null;
+  const hist = sub.history || [];
+  hist.unshift({ action: 'unsuspend', at: new Date().toISOString(), note: note || 'Levée suspension' });
+  sub.history = hist.slice(0, 50);
+  saveSub(mid, sub);
+}
+
+// ── Prolonger (ajouter des jours) ────────────────────────────
+function extendSub(mid, days, note) {
+  const sub = getSub(mid); if (!sub) return;
+  const base = sub.expires_at && new Date(sub.expires_at) > new Date()
+    ? new Date(sub.expires_at) : new Date();
+  const exp = new Date(base); exp.setDate(base.getDate() + days);
+  sub.expires_at = exp.toISOString();
+  sub.status = 'active';
+  const hist = sub.history || [];
+  hist.unshift({ action: 'extend', days, at: new Date().toISOString(), note: note || ('+' + days + ' jours'), expires_at: exp.toISOString() });
+  sub.history = hist.slice(0, 50);
+  saveSub(mid, sub);
+}
+
+// ── Réinitialiser (remise à zéro) ─────────────────────────────
+function resetSub(mid, note) {
+  localStorage.removeItem(_subKey(mid));
+  initSubIfNone(mid);
+  const sub = getSub(mid);
+  const hist = sub.history || [];
+  hist.unshift({ action: 'reset', at: new Date().toISOString(), note: note || 'Remise à zéro' });
+  sub.history = hist.slice(0, 50);
+  saveSub(mid, sub);
+}
+
+// ── Récupérer tous les marchands avec leur abonnement ─────────
+function getAllMerchantsWithSubs() {
+  const all = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (!key.startsWith('ds_merchant_')) continue;
+    try {
+      const m = JSON.parse(localStorage.getItem(key));
+      if (!m || !m.id) continue;
+      initSubIfNone(m.id);
+      const sub = getSub(m.id);
+      all.push({ merchant: m, sub });
+    } catch {}
+  }
+  return all.sort((a, b) => subDaysLeft(a.sub) - subDaysLeft(b.sub));
+}
+
+// ── Render principal ──────────────────────────────────────────
+function renderSubscriptions() {
+  const rows = getAllMerchantsWithSubs();
+  const srch = (document.getElementById('sub-srch')?.value || '').toLowerCase();
+  const fStatus = document.getElementById('sub-filter-status')?.value || '';
+  const fPlan   = document.getElementById('sub-filter-plan')?.value || '';
+
+  // Filtrer
+  const filtered = rows.filter(({ merchant: m, sub }) => {
+    const q = srch ? (
+      (m.nom_commerce || '').toLowerCase().includes(srch) ||
+      (m.email || '').toLowerCase().includes(srch) ||
+      (m.prenom || '').toLowerCase().includes(srch) ||
+      (m.nom || '').toLowerCase().includes(srch)
+    ) : true;
+    const s = fStatus ? subStatus(sub) === fStatus : true;
+    const p = fPlan ? (sub?.plan || '') === fPlan : true;
+    return q && s && p;
+  });
+
+  // KPIs
+  const total    = rows.length;
+  const actifs   = rows.filter(({ sub }) => subStatus(sub) === 'active').length;
+  const expires  = rows.filter(({ sub }) => subStatus(sub) === 'expired').length;
+  const suspended= rows.filter(({ sub }) => subStatus(sub) === 'suspended').length;
+  const grace    = rows.filter(({ sub }) => subStatus(sub) === 'grace').length;
+  const revenue  = rows.reduce((t, { sub }) => {
+    if (!sub || sub.plan === 'essai') return t;
+    return t + (PLANS[sub.plan]?.prix || 0);
+  }, 0);
+
+  const kpiGrid = document.getElementById('sub-kpi-grid');
+  if (kpiGrid) kpiGrid.innerHTML = [
+    { ico:'🏪', val: total,    lbl:'Commerces',    col:'#E8730C' },
+    { ico:'✅', val: actifs,   lbl:'Actifs',       col:'#2ECC71' },
+    { ico:'⏰', val: grace,    lbl:'Grâce (≤3j)',  col:'#F39C12' },
+    { ico:'❌', val: expires,  lbl:'Expirés',      col:'#E74C3C' },
+    { ico:'🚫', val: suspended,lbl:'Suspendus',    col:'#94A3B8' },
+    { ico:'💰', val: revenue.toLocaleString('fr-FR') + ' F', lbl:'Rev. mensuel estimé', col:'#A78BFA' },
+  ].map(k => `
+    <div class="adm-card" style="padding:0">
+      <div class="adm-card-body" style="padding:14px 16px;text-align:center">
+        <div style="font-size:1.6rem;margin-bottom:4px">${k.ico}</div>
+        <div style="font-family:var(--fh);font-size:1.35rem;font-weight:800;color:${k.col}">${k.val}</div>
+        <div style="font-size:.7rem;color:#475569;margin-top:2px">${k.lbl}</div>
+      </div>
+    </div>`).join('');
+
+  // Badge nav
+  const badge = document.getElementById('adm-sub-badge');
+  if (badge) {
+    if (expires + grace > 0) { badge.textContent = expires + grace; badge.style.display = ''; }
+    else badge.style.display = 'none';
+  }
+
+  // Tableau
+  const tbody = document.getElementById('sub-tbody');
+  const lbl = document.getElementById('sub-count-label');
+  if (lbl) lbl.textContent = filtered.length + ' commerce(s)';
+
+  if (!tbody) return;
+  if (filtered.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:24px;color:#475569">Aucun résultat</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = filtered.map(({ merchant: m, sub }) => {
+    const days = subDaysLeft(sub);
+    const plan = PLANS[sub?.plan] || PLANS.essai;
+    const daysColor = days <= 0 ? '#E74C3C' : days <= 3 ? '#F39C12' : days <= 10 ? '#F59E0B' : '#2ECC71';
+    return `<tr>
+      <td>
+        <div style="font-weight:700">${m.nom_commerce || '—'}</div>
+        <div style="font-size:.7rem;color:#64748B">${m.email || ''}</div>
+      </td>
+      <td><span style="background:${plan.color}22;color:${plan.color};padding:3px 8px;border-radius:100px;font-size:.72rem;font-weight:700">${plan.badge} ${plan.label}</span></td>
+      <td>${subStatusBadge(sub)}</td>
+      <td style="font-size:.78rem;color:#94A3B8">${fmtDate(sub?.started_at)}</td>
+      <td style="font-size:.78rem;color:#94A3B8">${fmtDate(sub?.expires_at)}</td>
+      <td style="font-weight:800;color:${daysColor}">${days > 0 ? days + 'j' : '0j'}</td>
+      <td>
+        <div style="display:flex;gap:5px;flex-wrap:wrap">
+          <button onclick="openSubModal('${m.id}')" style="background:var(--accent);color:#fff;border:none;border-radius:6px;padding:5px 9px;cursor:pointer;font-size:.72rem;font-weight:700" title="Gérer l'abonnement">⚙️ Gérer</button>
+          ${subStatus(sub) === 'suspended'
+            ? `<button onclick="unsuspendSub('${m.id}');renderSubscriptions()" style="background:rgba(46,204,113,.15);color:#2ECC71;border:1px solid rgba(46,204,113,.3);border-radius:6px;padding:5px 9px;cursor:pointer;font-size:.72rem;font-weight:700">▶ Lever</button>`
+            : `<button onclick="suspendSub('${m.id}');renderSubscriptions()" style="background:rgba(231,76,60,.12);color:#E74C3C;border:1px solid rgba(231,76,60,.3);border-radius:6px;padding:5px 9px;cursor:pointer;font-size:.72rem;font-weight:700">⏸ Suspend.</button>`
+          }
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+
+  // Expirations imminentes (7 jours)
+  renderExpiringSoon(rows);
+}
+
+function renderExpiringSoon(rows) {
+  const el = document.getElementById('sub-expiring-soon');
+  if (!el) return;
+  const soon = rows.filter(({ sub }) => {
+    const d = subDaysLeft(sub);
+    return d > 0 && d <= 7 && sub?.status !== 'suspended';
+  }).sort((a,b) => subDaysLeft(a.sub) - subDaysLeft(b.sub));
+
+  if (soon.length === 0) {
+    el.innerHTML = '<p style="color:#475569;font-size:.82rem">Aucune expiration dans les 7 prochains jours. ✅</p>';
+    return;
+  }
+  el.innerHTML = soon.map(({ merchant: m, sub }) => {
+    const d = subDaysLeft(sub);
+    const plan = PLANS[sub?.plan] || PLANS.essai;
+    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.05)">
+      <div>
+        <span style="font-weight:700">${m.nom_commerce}</span>
+        <span style="font-size:.72rem;color:#94A3B8;margin-left:8px">${plan.badge} ${plan.label}</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-weight:800;color:${d <= 3 ? '#E74C3C' : '#F39C12'}">${d}j</span>
+        <button onclick="openSubModal('${m.id}')" style="background:rgba(232,115,12,.15);color:#E8730C;border:1px solid rgba(232,115,12,.3);border-radius:6px;padding:4px 10px;cursor:pointer;font-size:.72rem;font-weight:700">Renouveler</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ── Modal Gestion abonnement ──────────────────────────────────
+function openSubModal(mid) {
+  // Trouver le marchand
+  let merchant = null;
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (!key.startsWith('ds_merchant_')) continue;
+    try {
+      const m = JSON.parse(localStorage.getItem(key));
+      if (m && m.id === mid) { merchant = m; break; }
+    } catch {}
+  }
+  if (!merchant) return;
+
+  initSubIfNone(mid);
+  const sub = getSub(mid);
+  _renderSubModal(merchant, sub);
+}
+
+function _renderSubModal(m, sub) {
+  const existing = document.getElementById('ds-sub-modal');
+  if (existing) existing.remove();
+
+  const plan = PLANS[sub?.plan] || PLANS.essai;
+  const days = subDaysLeft(sub);
+  const status = subStatus(sub);
+
+  const planOptions = Object.entries(PLANS).map(([key, p]) =>
+    `<option value="${key}" ${sub?.plan === key ? 'selected' : ''}>${p.badge} ${p.label} — ${p.prix > 0 ? p.prix.toLocaleString('fr-FR') + ' FCFA / ' + p.days + 'j' : 'Gratuit (7j)'}</option>`
+  ).join('');
+
+  const histHTML = (sub?.history || []).slice(0, 15).map(h => {
+    const icons = { activate:'✅', suspend:'🚫', unsuspend:'▶️', extend:'➕', reset:'🔄', create:'🆕' };
+    const cols  = { activate:'#2ECC71', suspend:'#E74C3C', unsuspend:'#2ECC71', extend:'#3B82F6', reset:'#94A3B8', create:'#E8730C' };
+    return `<div style="display:flex;gap:8px;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.04);font-size:.78rem">
+      <span style="color:${cols[h.action]||'#94A3B8'};flex-shrink:0">${icons[h.action]||'•'}</span>
+      <div>
+        <div>${h.note || h.action}</div>
+        <div style="color:#475569;font-size:.68rem">${new Date(h.at).toLocaleString('fr-FR')}${h.expires_at ? ' · exp. ' + fmtDate(h.expires_at) : ''}</div>
+      </div>
+    </div>`;
+  }).join('') || '<p style="color:#475569;font-size:.78rem;text-align:center;padding:10px 0">Aucun historique.</p>';
+
+  const html = `
+  <div style="background:var(--bg2,#1A1714);border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:24px;max-width:520px;width:100%;max-height:92vh;overflow-y:auto;box-shadow:0 25px 60px rgba(0,0,0,.6)">
+
+    <!-- En-tête -->
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px">
+      <div>
+        <h3 style="font-family:var(--fh,'Inter'),sans-serif;font-size:1.05rem;margin:0">🔑 Abonnement</h3>
+        <div style="font-size:.85rem;color:#E8730C;font-weight:700;margin-top:3px">${m.nom_commerce}</div>
+        <div style="font-size:.72rem;color:#64748B;margin-top:2px">${m.email || ''} · ID: ${m.id.slice(-8)}</div>
+      </div>
+      <button onclick="document.getElementById('ds-sub-modal').remove()" style="background:none;border:none;color:#475569;cursor:pointer;font-size:1.3rem;line-height:1">✕</button>
+    </div>
+
+    <!-- Statut actuel -->
+    <div style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:14px 16px;margin-bottom:18px;display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div>
+        <div style="font-size:.68rem;color:#64748B;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Plan actuel</div>
+        <div style="font-weight:700;color:${plan.color}">${plan.badge} ${plan.label}</div>
+      </div>
+      <div>
+        <div style="font-size:.68rem;color:#64748B;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Statut</div>
+        <div>${subStatusBadge(sub)}</div>
+      </div>
+      <div>
+        <div style="font-size:.68rem;color:#64748B;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Expiration</div>
+        <div style="font-size:.82rem;font-weight:600">${fmtDate(sub?.expires_at)}</div>
+      </div>
+      <div>
+        <div style="font-size:.68rem;color:#64748B;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Jours restants</div>
+        <div style="font-weight:800;font-size:1.1rem;color:${days<=0?'#E74C3C':days<=3?'#F39C12':'#2ECC71'}">${days}j</div>
+      </div>
+    </div>
+
+    <!-- Action: Activer / Renouveler -->
+    <div style="background:rgba(46,204,113,.05);border:1px solid rgba(46,204,113,.15);border-radius:10px;padding:14px 16px;margin-bottom:12px">
+      <div style="font-size:.78rem;font-weight:800;color:#2ECC71;text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px">✅ Activer / Renouveler</div>
+      <select id="sub-plan-select" style="width:100%;background:#0D1117;border:1px solid rgba(255,255,255,.1);border-radius:7px;color:#E2E8F0;padding:10px 12px;font-size:.85rem;margin-bottom:8px">
+        ${planOptions}
+      </select>
+      <input id="sub-act-note" placeholder="Note (optionnel)" style="width:100%;background:#0D1117;border:1px solid rgba(255,255,255,.1);border-radius:7px;color:#E2E8F0;padding:9px 12px;font-size:.82rem;margin-bottom:10px"/>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <button onclick="_subAction('activate','${m.id}')" style="background:linear-gradient(135deg,#2ECC71,#27AE60);color:#fff;border:none;border-radius:8px;padding:10px;cursor:pointer;font-weight:700;font-size:.83rem">▶ Activer maintenant</button>
+        <button onclick="_subAction('activate_extend','${m.id}')" style="background:rgba(46,204,113,.1);color:#2ECC71;border:1px solid rgba(46,204,113,.3);border-radius:8px;padding:10px;cursor:pointer;font-weight:700;font-size:.83rem">➕ Prolonger depuis fin</button>
+      </div>
+    </div>
+
+    <!-- Action: Prolongement rapide -->
+    <div style="background:rgba(59,130,246,.05);border:1px solid rgba(59,130,246,.15);border-radius:10px;padding:14px 16px;margin-bottom:12px">
+      <div style="font-size:.78rem;font-weight:800;color:#3B82F6;text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px">➕ Prolongement rapide</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:8px">
+        ${[7,15,30,60,90,180,365].map(d =>
+          `<button onclick="_subAction('extend_${d}','${m.id}')" style="background:rgba(59,130,246,.08);color:#3B82F6;border:1px solid rgba(59,130,246,.2);border-radius:7px;padding:7px 4px;cursor:pointer;font-size:.75rem;font-weight:700">+${d}j</button>`
+        ).join('')}
+      </div>
+      <input id="sub-ext-note" placeholder="Note prolongement (optionnel)" style="width:100%;background:#0D1117;border:1px solid rgba(255,255,255,.1);border-radius:7px;color:#E2E8F0;padding:9px 12px;font-size:.82rem"/>
+    </div>
+
+    <!-- Action: Suspension -->
+    <div style="background:rgba(231,76,60,.05);border:1px solid rgba(231,76,60,.15);border-radius:10px;padding:14px 16px;margin-bottom:12px">
+      <div style="font-size:.78rem;font-weight:800;color:#E74C3C;text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px">🚫 Suspension / Réactivation</div>
+      <input id="sub-sus-note" placeholder="Motif (ex: paiement en attente)" style="width:100%;background:#0D1117;border:1px solid rgba(255,255,255,.1);border-radius:7px;color:#E2E8F0;padding:9px 12px;font-size:.82rem;margin-bottom:8px"/>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <button onclick="_subAction('suspend','${m.id}')" style="background:rgba(231,76,60,.12);color:#E74C3C;border:1px solid rgba(231,76,60,.3);border-radius:8px;padding:9px;cursor:pointer;font-weight:700;font-size:.83rem">⏸ Suspendre</button>
+        <button onclick="_subAction('unsuspend','${m.id}')" style="background:rgba(46,204,113,.1);color:#2ECC71;border:1px solid rgba(46,204,113,.3);border-radius:8px;padding:9px;cursor:pointer;font-weight:700;font-size:.83rem">▶ Lever suspension</button>
+      </div>
+    </div>
+
+    <!-- Historique -->
+    <div style="background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:10px;padding:14px 16px;margin-bottom:12px">
+      <div style="font-size:.78rem;font-weight:800;color:#94A3B8;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">📋 Historique</div>
+      <div id="sub-hist-${m.id}">${histHTML}</div>
+    </div>
+
+    <!-- Réinitialiser -->
+    <div style="text-align:right">
+      <button onclick="if(confirm('Réinitialiser complètement l\\'abonnement ?')){resetSub('${m.id}');_refreshSubModal('${m.id}')}" style="background:none;border:1px solid rgba(148,163,184,.2);color:#64748B;border-radius:7px;padding:7px 14px;cursor:pointer;font-size:.75rem">🔄 Réinitialiser</button>
+    </div>
+
+  </div>`;
+
+  const modal = document.createElement('div');
+  modal.id = 'ds-sub-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px';
+  modal.innerHTML = html;
+  modal.onclick = e => { if (e.target === modal) modal.remove(); };
+  document.body.appendChild(modal);
+}
+
+// ── Dispatcher actions depuis le modal ────────────────────────
+function _subAction(action, mid) {
+  const planSel = document.getElementById('sub-plan-select')?.value || 'mensuel';
+  const actNote = document.getElementById('sub-act-note')?.value?.trim() || '';
+  const extNote = document.getElementById('sub-ext-note')?.value?.trim() || '';
+  const susNote = document.getElementById('sub-sus-note')?.value?.trim() || '';
+
+  if (action === 'activate') {
+    // Nouvelle activation depuis maintenant
+    const planDef = PLANS[planSel]; if (!planDef) return;
+    const now = new Date(); const exp = new Date(now); exp.setDate(now.getDate() + planDef.days);
+    const sub = getSub(mid) || {}; const hist = sub.history || [];
+    hist.unshift({ action:'activate', plan:planSel, at:now.toISOString(), note:actNote||('Activation ' + planDef.label), days:planDef.days, expires_at:exp.toISOString() });
+    saveSub(mid, { plan:planSel, status:'active', started_at:now.toISOString(), expires_at:exp.toISOString(), history:hist.slice(0,50) });
+    showAdmToast('✅ Abonnement ' + planDef.label + ' activé — ' + fmtDate(exp.toISOString()), 'success');
+
+  } else if (action === 'activate_extend') {
+    activateSub(mid, planSel, actNote || ('Prolongement ' + PLANS[planSel]?.label));
+    showAdmToast('➕ Prolongé jusqu\'au ' + fmtDate(getSub(mid)?.expires_at), 'success');
+
+  } else if (action.startsWith('extend_')) {
+    const days = parseInt(action.split('_')[1]);
+    extendSub(mid, days, extNote || ('+' + days + ' jours'));
+    showAdmToast('➕ +' + days + ' jours — expire le ' + fmtDate(getSub(mid)?.expires_at), 'success');
+
+  } else if (action === 'suspend') {
+    suspendSub(mid, susNote || 'Suspension admin');
+    showAdmToast('🚫 Abonnement suspendu', 'error');
+
+  } else if (action === 'unsuspend') {
+    unsuspendSub(mid, susNote || 'Levée suspension admin');
+    showAdmToast('▶ Suspension levée', 'success');
+  }
+
+  // Rafraîchir le modal
+  _refreshSubModal(mid);
+}
+
+function _refreshSubModal(mid) {
+  let merchant = null;
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k.startsWith('ds_merchant_')) continue;
+    try { const m = JSON.parse(localStorage.getItem(k)); if (m?.id === mid) { merchant = m; break; } } catch {}
+  }
+  if (!merchant) return;
+  document.getElementById('ds-sub-modal')?.remove();
+  _renderSubModal(merchant, getSub(mid));
+  if (document.getElementById('as-subscriptions')?.style?.display !== 'none') renderSubscriptions();
+}
+
+// ── Toast admin ───────────────────────────────────────────────
+function showAdmToast(msg, type) {
+  if (typeof showToast === 'function') { showToast(msg, type); return; }
+  const t = document.createElement('div');
+  t.style.cssText = 'position:fixed;bottom:24px;right:24px;background:' + (type==='error'?'#E74C3C':'#2ECC71') + ';color:#fff;padding:10px 18px;border-radius:9px;font-weight:700;z-index:99999;font-size:.85rem;box-shadow:0 4px 20px rgba(0,0,0,.4)';
+  t.textContent = msg; document.body.appendChild(t);
+  setTimeout(() => t.remove(), 3000);
+}
+
+// ── Export CSV abonnements ────────────────────────────────────
+function exportSubsCSV() {
+  const rows = getAllMerchantsWithSubs();
+  const headers = ['Commerce','Email','Plan','Statut','Debut','Expiration','Jours restants'];
+  const lines = rows.map(({ merchant: m, sub }) => [
+    m.nom_commerce||'', m.email||'', sub?.plan||'', subStatus(sub),
+    fmtDate(sub?.started_at), fmtDate(sub?.expires_at), subDaysLeft(sub)
+  ].map(v => '"' + String(v).replace(/"/g, '""') + '"').join(','));
+  const csv = [headers.join(','), ...lines].join('\n');
+  const a = document.createElement('a');
+  a.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent('\ufeff' + csv);
+  a.download = 'abonnements_' + new Date().toISOString().slice(0,10) + '.csv';
+  a.click();
+  showAdmToast('📥 Export CSV téléchargé', 'success');
+}
+
+// [hook adminSection supprimé — renderSubscriptions appelé depuis adminSection original]
+
+// ── Vérification abonnement à la connexion marchand ───────────
+function checkMerchantSubscription(mid) {
+  initSubIfNone(mid);
+  const sub = getSub(mid);
+  const status = subStatus(sub);
+  const days = subDaysLeft(sub);
+  if (status === 'suspended') {
+    showToast('🚫 Votre abonnement est suspendu. Contactez l\'administrateur.', 'error');
+    return false;
+  }
+  if (status === 'expired') {
+    showToast('❌ Votre abonnement a expiré. Renouvelez pour continuer.', 'error');
+    return false;
+  }
+  if (status === 'grace') {
+    showToast('⚠️ Votre abonnement expire dans ' + days + 'j — pensez à renouveler !', 'error');
+  }
+  return true;
+}
 
 
 // --- FINAL INIT ---
