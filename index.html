@@ -405,6 +405,17 @@ select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='ht
 .cart-client-area input:focus{outline:none;border-color:var(--accent)}
 .cart-client-area select{width:100%;background:var(--surface);border:1px solid var(--border);border-radius:var(--rsm);color:var(--text);padding:8px 10px;font-size:.85rem}
 .wa-hint{font-size:.72rem;color:var(--success);display:flex;align-items:center;gap:4px;margin-top:4px}
+.vendeur-bar{display:flex;align-items:center;gap:8px;background:rgba(232,115,12,.08);border:1px solid rgba(232,115,12,.18);border-radius:var(--rsm);padding:7px 10px;margin-bottom:8px}
+.vendeur-bar input{flex:1;background:transparent;border:none;color:var(--text);font-size:.85rem;font-weight:600;outline:none}
+.vendeur-bar input::placeholder{color:var(--text-dim)}
+.commandes-badge{position:absolute;top:-4px;right:-4px;background:#E74C3C;color:#fff;border-radius:50%;width:16px;height:16px;font-size:.6rem;display:flex;align-items:center;justify-content:center;font-weight:800}
+.cmd-item{background:var(--surface2);border:1px solid var(--border);border-radius:var(--rsm);padding:12px;margin-bottom:8px;transition:border-color .2s}
+.cmd-item.new-cmd{border-color:var(--accent);animation:pulse-cmd .8s ease 2}
+@keyframes pulse-cmd{0%,100%{border-color:var(--accent)}50%{border-color:transparent}}
+.cmd-item-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.cmd-vendeur-tag{background:rgba(232,115,12,.15);color:var(--accent);border-radius:100px;padding:2px 8px;font-size:.7rem;font-weight:700}
+.cmd-item-rows{font-size:.78rem;color:var(--text-muted)}
+.cmd-actions{display:flex;gap:6px;margin-top:8px}
 /* Indicateur client rempli dans le header */
 .cli-preview{font-size:.75rem;color:var(--accent);font-weight:600;font-family:var(--fh);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px}
 .cart-tot{background:var(--bg);border:1px solid var(--border);border-radius:var(--rsm);padding:14px;margin-bottom:12px}
@@ -1557,7 +1568,19 @@ async function _fbSyncAll(data) {
             <div class="ct-row"><span>Sous-total</span><span id="cart-sub">0</span></div>
             <div class="ct-row big"><span>TOTAL</span><span id="cart-total">0 FCFA</span></div>
           </div>
-          <button class="btn-p full xl" onclick="processCheckout()">✓ Valider la vente</button>
+          <!-- Vendeur + envoi commande -->
+          <div class="vendeur-bar">
+            <span style="font-size:.9rem">👤</span>
+            <input id="cart-vendeur-nom" placeholder="Votre prénom (vendeur)" maxlength="30" autocomplete="off"/>
+            <button onclick="Vendeur.save()" title="Mémoriser" style="background:none;border:none;color:var(--accent);cursor:pointer;font-size:.85rem;padding:2px 4px">💾</button>
+          </div>
+          <div style="display:flex;gap:8px;margin-bottom:6px">
+            <button class="btn-p full xl" onclick="processCheckout()" style="flex:2">✓ Valider la vente</button>
+            <button onclick="Vendeur.sendCommande()" title="Envoyer à la caisse" style="flex:1;background:rgba(232,115,12,.15);color:var(--accent);border:1px solid rgba(232,115,12,.35);border-radius:var(--rsm);padding:0 10px;font-size:.78rem;font-weight:700;cursor:pointer;position:relative">
+              📤 Envoyer
+              <span id="cmd-out-badge" class="commandes-badge" style="display:none">0</span>
+            </button>
+          </div>
         </div>
       </div>
     </section>
@@ -1664,6 +1687,12 @@ async function _fbSyncAll(data) {
           <button class="btn-p" onclick="confirmerOuverture()">Confirmer l'ouverture</button>
         </div>
       </div>
+    <!-- Bouton commandes reçues (caissière) -->
+    <button id="btn-commandes-recues" onclick="Vendeur.showCommandesModal()"
+      style="position:fixed;bottom:80px;right:16px;background:var(--accent);color:#fff;border:none;border-radius:50%;width:52px;height:52px;font-size:1.3rem;cursor:pointer;box-shadow:0 4px 16px rgba(232,115,12,.5);z-index:900;display:none;align-items:center;justify-content:center">
+      📋<span id="cmd-in-badge" class="commandes-badge" style="display:none">0</span>
+    </button>
+
     </div>
 
     <!-- GESTION STOCK -->
@@ -3786,12 +3815,11 @@ const BT = {
     { svc: '00001101-0000-1000-8000-00805f9b34fb', chr: '00001101-0000-1000-8000-00805f9b34fb', label: 'SPP Classic' },
     { svc: 'e7810a71-73ae-499d-8c15-faa9aef0c3f2', chr: 'bef8d6c9-9c21-4c9e-b632-bd58c1009f9f', label: 'iDPRT' },
     { svc: '49535343-fe7d-4ae5-8fa9-9fafd205e455', chr: '49535343-aca3-481c-91ec-d85e28a60318', label: 'Microchip BM7x' },
-    { svc: '18f0',                                  chr: '2af1',                                  label: 'Short UUID POS' },
+    { svc: '000018f0-0000-1000-8000-00805f9b34fb', chr: '00002af1-0000-1000-8000-00805f9b34fb', label: 'POS-80C 128bit' },
   ],
 
   // ── Noms connus pour le filtre requestDevice ──────────────
-  NAME_PREFIXES: ['POS', 'Printer', 'RPP', 'BlueTooth', 'MTP', 'TP', 'BT', 'ZJ', 'XP', 'GP',
-                  'MPT', 'iDPRT', 'Sewoo', 'Rongta', 'Epson', 'Star', 'Bixolon', 'DP'],
+  NAME_PREFIXES: ['POS', 'RPP', 'MTP', 'ZJ', 'XP', 'GP', 'Printer', 'BT', 'iDPRT', 'Sewoo'],
 
   // ── Connexion BLE améliorée — 3 passes + reconnexion auto ──
   connect: async function(silent = false) {
@@ -3815,8 +3843,11 @@ const BT = {
         });
       } catch(filterErr) {
         try {
+          // Passe 2 : filtre sur service principal POS-80C uniquement
           device = await navigator.bluetooth.requestDevice({
-            filters: allServices.filter(s => s.length > 8).map(s => ({ services: [s] })),
+            filters: [{ services: ['000018f0-0000-1000-8000-00805f9b34fb'] },
+                      { services: ['49535343-fe7d-4ae5-8fa9-9fafd205e455'] },
+                      { services: ['6e400001-b5a3-f393-e0a9-e50e24dcca9e'] }],
             optionalServices: allServices
           });
         } catch(svcErr) {
@@ -4198,7 +4229,7 @@ async function btPrint() {
   if (!BT.isConnected()) {
     const ok = await BT.connect();
     if (!ok) return;
-    // Si on vient juste de connecter, lancer l'impression directement
+    await new Promise(r => setTimeout(r, 600)); // délai stabilisation BLE
   }
 
   const lastSale = window._lastSale;
@@ -9819,6 +9850,378 @@ function checkMerchantSubscription(mid) {
   }
   return true;
 }
+
+
+
+// ============================================================
+// ★ MODULE VENDEUR — Envoi de commandes + Impression avec nom
+// ============================================================
+
+const Vendeur = {
+
+  // ── Clé de stockage des commandes en attente ─────────────
+  _cmdKey(mid) { return 'ds_cmds_' + mid; },
+
+  // ── Sauvegarder/lire le nom du vendeur courant ───────────
+  save() {
+    const nom = document.getElementById('cart-vendeur-nom')?.value?.trim();
+    if (!nom) { showToast('✏️ Saisissez votre prénom', 'error'); return; }
+    localStorage.setItem('ds_vendeur_nom', nom);
+    showToast('💾 Prénom "' + nom + '" mémorisé', 'success');
+  },
+
+  getNom() {
+    return document.getElementById('cart-vendeur-nom')?.value?.trim()
+      || localStorage.getItem('ds_vendeur_nom')
+      || '';
+  },
+
+  // ── Init : restaurer le prénom mémorisé ──────────────────
+  init() {
+    const saved = localStorage.getItem('ds_vendeur_nom');
+    const input = document.getElementById('cart-vendeur-nom');
+    if (saved && input) input.value = saved;
+
+    // Écouter les commandes entrantes via BroadcastChannel
+    if (typeof BroadcastChannel !== 'undefined') {
+      const bc = new BroadcastChannel('ds_commandes');
+      bc.onmessage = (e) => {
+        if (e.data?.type === 'new_commande') {
+          const m = Auth.current();
+          if (m && e.data.merchant_id === m.id) {
+            Vendeur._onCommandeReceived(e.data.commande);
+          }
+        }
+      };
+    }
+
+    // Afficher/masquer le bouton flottant selon le rôle
+    this._updateUI();
+  },
+
+  _updateUI() {
+    const m = Auth.current();
+    if (!m) return;
+    const pending = this._getPending(m.id);
+    // Bouton flottant caissière — visible si commandes en attente
+    const btnFloat = document.getElementById('btn-commandes-recues');
+    if (btnFloat) {
+      btnFloat.style.display = pending.length > 0 ? 'flex' : 'none';
+    }
+    const badge = document.getElementById('cmd-in-badge');
+    if (badge) {
+      badge.textContent = pending.length;
+      badge.style.display = pending.length > 0 ? 'flex' : 'none';
+    }
+  },
+
+  // ── Envoyer la commande courante du panier ───────────────
+  sendCommande() {
+    const m = Auth.current(); if (!m) return;
+    if (!cart || cart.length === 0) { showToast('⚠️ Panier vide', 'error'); return; }
+
+    const nomVendeur = this.getNom();
+    if (!nomVendeur) {
+      showToast('✏️ Saisissez votre prénom vendeur avant d\'envoyer', 'error');
+      document.getElementById('cart-vendeur-nom')?.focus();
+      return;
+    }
+
+    const cfg = getConfig();
+    const dev = cfg?.devise || 'FCFA';
+    const cliNom = document.getElementById('cart-cli-nom')?.value?.trim() || '';
+    const total  = cartTotal ? cartTotal() : cart.reduce((t,i) => t + (i.prix * (i.qty||1)), 0);
+
+    const commande = {
+      id: 'cmd_' + Date.now() + '_' + Math.random().toString(36).slice(2,5),
+      vendeur_nom: nomVendeur,
+      client_nom:  cliNom || 'Client',
+      items:       JSON.parse(JSON.stringify(cart)),
+      total,
+      devise:      dev,
+      sent_at:     new Date().toISOString(),
+      statut:      'pending', // pending | accepted | printed | cancelled
+      merchant_id: m.id,
+    };
+
+    // Sauvegarder localement
+    const all = this._getPending(m.id);
+    all.unshift(commande);
+    localStorage.setItem(this._cmdKey(m.id), JSON.stringify(all.slice(0, 50)));
+
+    // Diffuser via BroadcastChannel (même appareil, plusieurs onglets)
+    if (typeof BroadcastChannel !== 'undefined') {
+      const bc = new BroadcastChannel('ds_commandes');
+      bc.postMessage({ type: 'new_commande', merchant_id: m.id, commande });
+    }
+
+    showToast('📤 Commande de ' + nomVendeur + ' envoyée — ' + cart.length + ' article(s)', 'success');
+    this._updateUI();
+
+    // Optionnel : vider le panier après envoi
+    if (confirm('Commande envoyée ! Vider le panier ?')) {
+      clearCart();
+      if (typeof renderPOS === 'function') renderPOS();
+    }
+  },
+
+  // ── Recevoir une commande (notification) ─────────────────
+  _onCommandeReceived(cmd) {
+    showToast('🔔 Nouvelle commande de ' + cmd.vendeur_nom + ' — ' + fmtMoney(cmd.total, cmd.devise), 'success');
+    this._updateUI();
+    // Flash le bouton flottant
+    const btn = document.getElementById('btn-commandes-recues');
+    if (btn) {
+      btn.style.transform = 'scale(1.2)';
+      setTimeout(() => btn.style.transform = '', 400);
+    }
+  },
+
+  // ── Récupérer commandes en attente ───────────────────────
+  _getPending(mid) {
+    try { return JSON.parse(localStorage.getItem(this._cmdKey(mid)) || '[]'); } catch { return []; }
+  },
+
+  // ── Modal commandes (vue caissière) ──────────────────────
+  showCommandesModal() {
+    const m = Auth.current(); if (!m) return;
+    const cmds = this._getPending(m.id);
+    const dev  = getConfig()?.devise || 'FCFA';
+
+    const existing = document.getElementById('ds-cmds-modal');
+    if (existing) existing.remove();
+
+    const listHTML = cmds.length === 0
+      ? '<p style="color:var(--text-dim);text-align:center;padding:24px 0;font-size:.85rem">Aucune commande en attente.</p>'
+      : cmds.map(cmd => {
+          const elapsed = Math.round((Date.now() - new Date(cmd.sent_at)) / 60000);
+          const statusColors = { pending:'#F39C12', accepted:'#3B82F6', printed:'#2ECC71', cancelled:'#E74C3C' };
+          const statusLabels = { pending:'En attente', accepted:'Acceptée', printed:'Imprimée', cancelled:'Annulée' };
+          const col = statusColors[cmd.statut] || '#94A3B8';
+          const lbl = statusLabels[cmd.statut] || cmd.statut;
+          const itemsHTML = cmd.items.map(i =>
+            `<div class="cmd-item-rows">${i.qty > 1 ? '×'+i.qty+' ' : ''}${i.nom} — <strong>${fmtMoney(i.prix*(i.qty||1), dev)}</strong></div>`
+          ).join('');
+          return `<div class="cmd-item" id="cmd-${cmd.id}">
+            <div class="cmd-item-hdr">
+              <div>
+                <span class="cmd-vendeur-tag">👤 ${cmd.vendeur_nom}</span>
+                ${cmd.client_nom && cmd.client_nom !== 'Client'
+                  ? `<span style="font-size:.72rem;color:var(--text-muted);margin-left:6px">→ ${cmd.client_nom}</span>`
+                  : ''}
+              </div>
+              <div style="text-align:right">
+                <div style="font-weight:800;color:var(--accent)">${fmtMoney(cmd.total, dev)}</div>
+                <div style="font-size:.65rem;color:var(--text-dim)">${elapsed < 1 ? 'À l\'instant' : elapsed + ' min'}</div>
+              </div>
+            </div>
+            ${itemsHTML}
+            <div style="margin-top:6px">
+              <span style="background:${col}22;color:${col};border-radius:100px;padding:2px 8px;font-size:.68rem;font-weight:700">${lbl}</span>
+            </div>
+            <div class="cmd-actions">
+              <button onclick="Vendeur.accepterEtImprimer('${cmd.id}')"
+                style="flex:2;background:var(--accent);color:#fff;border:none;border-radius:var(--rsm);padding:8px;cursor:pointer;font-weight:700;font-size:.8rem">
+                🖨️ Accepter & Imprimer
+              </button>
+              <button onclick="Vendeur.chargerDansCart('${cmd.id}')"
+                style="flex:1;background:rgba(59,130,246,.12);color:#3B82F6;border:1px solid rgba(59,130,246,.3);border-radius:var(--rsm);padding:8px;cursor:pointer;font-size:.78rem;font-weight:700">
+                🛒 Charger
+              </button>
+              <button onclick="Vendeur.annulerCommande('${cmd.id}')"
+                style="background:rgba(231,76,60,.1);color:#E74C3C;border:1px solid rgba(231,76,60,.3);border-radius:var(--rsm);padding:8px 10px;cursor:pointer;font-size:.8rem">
+                ✕
+              </button>
+            </div>
+          </div>`;
+        }).join('');
+
+    const mo = document.createElement('div');
+    mo.id = 'ds-cmds-modal';
+    mo.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:9999;display:flex;align-items:flex-end;justify-content:center;padding:0';
+    mo.innerHTML = `
+      <div style="background:var(--bg2);border-radius:var(--rlg) var(--rlg) 0 0;width:100%;max-width:520px;max-height:85vh;overflow-y:auto;padding:20px;box-shadow:var(--shadow-a)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+          <h3 style="font-family:var(--fh)">📋 Commandes reçues <span style="background:var(--accent);color:#fff;border-radius:100px;padding:2px 8px;font-size:.7rem;margin-left:6px">${cmds.length}</span></h3>
+          <button onclick="document.getElementById('ds-cmds-modal').remove()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:1.3rem">✕</button>
+        </div>
+        ${listHTML}
+      </div>`;
+    mo.onclick = e => { if (e.target === mo) mo.remove(); };
+    document.body.appendChild(mo);
+  },
+
+  // ── Accepter + imprimer BLE directement ──────────────────
+  async accepterEtImprimer(cmdId) {
+    const m = Auth.current(); if (!m) return;
+    const all  = this._getPending(m.id);
+    const cmd  = all.find(c => c.id === cmdId); if (!cmd) return;
+    const cfg  = getConfig();
+
+    // Créer une vente temporaire pour buildEscPos
+    const fakeSale = {
+      id: cmd.id,
+      client_nom:   cmd.client_nom,
+      client_wa:    '',
+      items:        cmd.items,
+      total:        cmd.total,
+      devise:       cmd.devise,
+      vendeur_nom:  cmd.vendeur_nom,
+      created_at:   cmd.sent_at,
+      statut:       'completed',
+    };
+
+    // Marquer comme acceptée
+    cmd.statut = 'accepted';
+    localStorage.setItem(this._cmdKey(m.id), JSON.stringify(all));
+
+    // Impression BLE
+    if (BT.isConnected()) {
+      const data = buildEscPos(fakeSale, m, cfg);
+      const ok = await BT.send(data);
+      if (ok) {
+        cmd.statut = 'printed';
+        localStorage.setItem(this._cmdKey(m.id), JSON.stringify(all));
+        showToast('🖨️ Ticket imprimé — vendeur: ' + cmd.vendeur_nom, 'success');
+      } else {
+        showToast('❌ Échec impression BLE', 'error');
+      }
+    } else {
+      // Pas de BLE : afficher la facture pour impression manuelle
+      window._lastSale = { sale: fakeSale, m, cfg };
+      setPrintFmt('58');
+      showInvoice(fakeSale, m, cfg);
+      cmd.statut = 'printed';
+      localStorage.setItem(this._cmdKey(m.id), JSON.stringify(all));
+    }
+
+    document.getElementById('ds-cmds-modal')?.remove();
+    this._updateUI();
+  },
+
+  // ── Charger la commande dans le panier actif ─────────────
+  chargerDansCart(cmdId) {
+    const m = Auth.current(); if (!m) return;
+    const all = this._getPending(m.id);
+    const cmd = all.find(c => c.id === cmdId); if (!cmd) return;
+
+    // Charger les articles
+    if (typeof clearCart === 'function') clearCart();
+    cmd.items.forEach(item => {
+      if (typeof addToCart === 'function') {
+        addToCart({ pid: item.product_id || '', nom: item.nom, prix: item.prix, qty: item.qty || 1 });
+      }
+    });
+
+    // Remplir le nom vendeur
+    const input = document.getElementById('cart-vendeur-nom');
+    if (input) input.value = cmd.vendeur_nom;
+
+    // Remplir le client
+    const cliNom = document.getElementById('cart-cli-nom');
+    if (cliNom) cliNom.value = cmd.client_nom !== 'Client' ? cmd.client_nom : '';
+
+    if (typeof renderPOS === 'function') renderPOS();
+    document.getElementById('ds-cmds-modal')?.remove();
+    showToast('🛒 Commande de ' + cmd.vendeur_nom + ' chargée dans le panier', 'success');
+
+    // Marquer comme acceptée
+    cmd.statut = 'accepted';
+    localStorage.setItem(this._cmdKey(m.id), JSON.stringify(all));
+    this._updateUI();
+  },
+
+  // ── Annuler une commande ──────────────────────────────────
+  annulerCommande(cmdId) {
+    const m = Auth.current(); if (!m) return;
+    const all = this._getPending(m.id);
+    const updated = all.filter(c => c.id !== cmdId);
+    localStorage.setItem(this._cmdKey(m.id), JSON.stringify(updated));
+    document.getElementById('ds-cmds-modal')?.remove();
+    this._updateUI();
+    showToast('✕ Commande annulée', 'success');
+  },
+};
+
+// ── Patch buildEscPos pour inclure le nom vendeur ────────────
+const _origBuildEscPos2 = buildEscPos;
+buildEscPos = function(sale, m, cfg) {
+  // On va injecter la ligne vendeur en post-traitement
+  // Construire d'abord le ticket normal
+  const data = _origBuildEscPos2(sale, m, cfg);
+  if (!sale.vendeur_nom) return data;
+
+  // Insérer "Vendeur: [nom]" après l'en-tête (après le premier séparateur)
+  // On reconstruit avec la ligne vendeur intégrée
+  const ESC = 0x1B, GS = 0x1D, LF = 0x0A;
+  const vendeurLine = Array.from(escEncode('Vendeur : ' + sale.vendeur_nom.slice(0, 28)));
+
+  // Find the first separator (0x1B 0x61 after header) by pattern
+  // Simpler: rebuild vendeur header insertion at known position
+  // We'll prepend to items section — inject before GS 0x56 (cut) is at the end
+  // Strategy: insert right after N° and date lines by rebuilding from scratch
+  // Actually easiest: insert a small extra block right before the items separator
+
+  // Build vendeur block: center-aligned italic line
+  const vBlock = [
+    ESC, 0x61, 0x01,           // center
+    ESC, 0x45, 0x01,           // bold ON
+    ...vendeurLine, LF,
+    ESC, 0x45, 0x00,           // bold OFF
+    ESC, 0x61, 0x00,           // left
+  ];
+
+  // Find position to insert (after date/num block, before items)
+  // Simple: remove last 4 bytes (cut command), append vendor block, re-add cut
+  const arr = Array.from(data);
+  const mainBody = arr.slice(0, arr.length - 4);
+  const cutCmd   = arr.slice(arr.length - 4);
+
+  // Find first 0x1D 0x56 (cut) backwards = our cutCmd
+  // Just re-insert vendeur block right after the separator that precedes items
+  // For simplicity, insert it early in the stream after the header block
+  // We'll add it after byte index ~100 (past the header center block)
+
+  // Find the second 0x1B 0x61 0x01 (center align) which marks the start of "TICKET DE CAISSE"
+  let insertAt = -1;
+  for (let i = 50; i < mainBody.length - 10; i++) {
+    // Look for the separator (0x1B 0x61 0x00 = left align, following the date sm())
+    if (mainBody[i] === 0x1B && mainBody[i+1] === 0x61 && mainBody[i+2] === 0x00 &&
+        mainBody[i-3] === LF) {
+      insertAt = i + 3; // after ESC a 0x00 + any subsequent bytes
+      // Find next LF as end of current block
+      while (insertAt < mainBody.length && mainBody[insertAt] !== 0x1B) insertAt++;
+      break;
+    }
+  }
+
+  if (insertAt > 0) {
+    const result = [
+      ...mainBody.slice(0, insertAt),
+      ...vBlock,
+      ...mainBody.slice(insertAt),
+      ...cutCmd,
+    ];
+    return new Uint8Array(result);
+  }
+  return data;
+};
+
+// ── Patch buildThermalInvoice pour afficher vendeur ──────────
+const _origBuildThermal = buildThermalInvoice;
+buildThermalInvoice = function(sale, m, cfg, num, ds, dev, waNum, fmt) {
+  let html = _origBuildThermal(sale, m, cfg, num, ds, dev, waNum, fmt);
+  if (!sale.vendeur_nom) return html;
+  // Injecter ligne vendeur après le numéro de ticket
+  const anchor = `<div class="therm-center">${'<strong>TICKET DE CAISSE</strong>'}</div>`;
+  const vendeurLine = `<div class="therm-sm therm-center" style="color:var(--accent);font-weight:700">👤 Vendeur : ${sale.vendeur_nom}</div>`;
+  return html.replace(anchor, anchor + vendeurLine);
+};
+
+// ── Init Vendeur au démarrage ─────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  setTimeout(() => Vendeur.init(), 900);
+});
 
 
 // --- FINAL INIT ---
