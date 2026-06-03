@@ -1906,8 +1906,15 @@ async function _fbSyncAll(data) {
     <div class="mftr">
       <button class="btn-g" onclick="closeMo('mo-inv')">Fermer</button>
       <button class="btn-d sm" id="inv-cancel-btn" onclick="cancelFromInvoice()" style="display:none">🚫 Annuler</button>
+      <!-- BLE notice - shown when not connected -->
+      <div id="bt-invoice-notice" style="display:none;width:100%;margin-bottom:8px;background:rgba(232,115,12,.1);border:1px solid rgba(232,115,12,.3);border-radius:var(--rsm);padding:8px 12px;align-items:center;gap:10px;flex-wrap:wrap">
+        <span style="font-size:.8rem;color:var(--accent);flex:1">📡 Imprimante non connectée</span>
+        <button onclick="btConnect()" style="background:var(--accent);color:#fff;border:none;border-radius:var(--rsm);padding:6px 14px;cursor:pointer;font-weight:700;font-size:.8rem;white-space:nowrap">
+          🔗 Connecter BLE
+        </button>
+      </div>
       <button class="btn-p" id="wa-send-btn" onclick="sendWA()" style="background:#25D366">💬 WhatsApp</button>
-      <button class="btn-p" id="bt-print-btn" onclick="btPrint()" style="background:#1565C0">🖨️ Bluetooth</button>
+      <button class="btn-p" id="bt-print-btn" onclick="btConnect()" style="background:linear-gradient(135deg,#1565C0,#1976D2)">📡 Connecter BLE</button>
       <button class="btn-p" onclick="doPrint()">🖨️ Imprimer</button>
     </div>
   </div>
@@ -3675,6 +3682,16 @@ function fmtDateFR(isoStr) {
 
 function showInvoice(sale, m, cfg) {
   window._lastSale = {sale, m, cfg};
+  // Show BLE connect notice if not connected (will update after btUpdateBtn)
+  setTimeout(() => {
+    const btNotice = document.getElementById('bt-invoice-notice');
+    if (!btNotice) return;
+    if (BT.isConnected()) {
+      btNotice.style.display = 'none';
+    } else {
+      btNotice.style.display = 'flex';
+    }
+  }, 150);
   const dev = cfg?.devise || sale.devise || 'FCFA';
   const num = 'DS-' + sale.id.substr(-8).toUpperCase();
   const ds = fmtDateFR(sale.created_at);
@@ -4191,16 +4208,22 @@ function btUpdateBtn() {
     btn.innerHTML = '🖨️ ' + (BT.model || 'BLE') + ' ✓';
     btn.style.background = 'linear-gradient(135deg,#2E7D32,#43A047)';
     btn.style.boxShadow = '0 0 0 2px rgba(46,204,113,.35)';
-    btn.title = 'Connecte: ' + (BT.model||'BLE') + ' — Clic: imprimer | Long clic: menu';
-    // Menu long clic
+    btn.title = 'Connecté — Clic: imprimer | Clic droit: menu';
+    btn.onclick = () => btPrint();
     btn.oncontextmenu = e => { e.preventDefault(); _btMenu(); };
   } else {
-    btn.innerHTML = '🖨️ Bluetooth';
+    btn.innerHTML = '📡 Connecter BLE';
     btn.style.background = 'linear-gradient(135deg,#1565C0,#1976D2)';
     btn.style.boxShadow = '';
-    btn.title = 'Connecter une imprimante thermique BLE';
+    btn.title = 'Cliquez pour connecter l\'imprimante thermique';
+    // CRITICAL: onclick must call btConnect() directly - NOT btPrint()
+    // btConnect() only requests device (user gesture preserved)
+    btn.onclick = () => btConnect();
     btn.oncontextmenu = null;
   }
+  // Refresh invoice BLE notice
+  const notice = document.getElementById('bt-invoice-notice');
+  if (notice) notice.style.display = BT.isConnected() ? 'none' : 'flex';
 }
 
 function _btMenu() {
@@ -4223,13 +4246,23 @@ function _btMenu() {
 }
 
 // ── Impression BLE (connexion auto si nécessaire) ─────────────
+// ── Connexion BLE directe (geste utilisateur direct requis) ──
+function btConnect() {
+  // This function MUST be called directly from an onclick - not from async code
+  BT.connect().then(ok => {
+    if (ok) btUpdateBtn();
+  });
+}
+
 async function btPrint() {
   const btn = document.getElementById('bt-print-btn');
 
   if (!BT.isConnected()) {
-    const ok = await BT.connect();
-    if (!ok) return;
-    await new Promise(r => setTimeout(r, 600)); // délai stabilisation BLE
+    // Cannot call connect() here if this was triggered programmatically
+    // Show the user a message to connect first via the dedicated button
+    showToast('📡 Connectez l\'imprimante via le bouton Bluetooth en haut', 'error');
+    btUpdateBtn();
+    return;
   }
 
   const lastSale = window._lastSale;
@@ -9892,7 +9925,10 @@ const Vendeur = {
     const input = document.getElementById('cart-vendeur-nom');
     if (saved && input) input.value = saved;
 
-    // BroadcastChannel : notification temps réel (même appareil, onglets différents)
+    // Demander permission notifications système au premier usage
+    this._requestNotifPermission();
+
+    // BroadcastChannel : temps réel entre onglets du même appareil
     if (typeof BroadcastChannel !== 'undefined') {
       try {
         const bc = new BroadcastChannel('ds_commandes');
@@ -9903,27 +9939,179 @@ const Vendeur = {
           }
         };
         this._bc = bc;
-      } catch(e) { console.warn('[Vendeur] BroadcastChannel indisponible:', e.message); }
+      } catch(e) { console.warn('[Vendeur] BroadcastChannel:', e.message); }
     }
 
-    // Polling localStorage toutes les 3s (fallback multi-appareil même réseau)
-    let lastCount = -1;
+    // Polling localStorage toutes les 2s (multi-appareil même stockage)
+    let lastKnownIds = new Set();
+    let initialized  = false;
+
     this._pollTimer = setInterval(() => {
       const m = Auth.current();
       if (!m) return;
-      const cmds = this._getPending(m.id);
-      const pending = cmds.filter(c => c.statut === 'pending').length;
-      if (pending !== lastCount) {
-        lastCount = pending;
+      const cmds    = this._getPending(m.id);
+      const pending = cmds.filter(c => c.statut === 'pending');
+
+      // Initialisation silencieuse au 1er passage
+      if (!initialized) {
+        pending.forEach(c => lastKnownIds.add(c.id));
+        initialized = true;
         this._updateUI();
-        if (pending > lastCount && lastCount >= 0) {
-          const newest = cmds[0];
-          if (newest) this._onCommandeReceived(newest);
-        }
+        return;
       }
-    }, 3000);
+
+      // Détecter les NOUVELLES commandes (ID pas encore vu)
+      const newCmds = pending.filter(c => !lastKnownIds.has(c.id));
+      newCmds.forEach(cmd => {
+        lastKnownIds.add(cmd.id);
+        this._onCommandeReceived(cmd);
+      });
+
+      // Nettoyer les IDs qui ne sont plus pending
+      const currentIds = new Set(pending.map(c => c.id));
+      lastKnownIds.forEach(id => { if (!currentIds.has(id)) lastKnownIds.delete(id); });
+
+      this._updateUI();
+    }, 2000);
 
     this._updateUI();
+  },
+
+  // ── Demander permission notification système ──────────────
+  _requestNotifPermission() {
+    if (!('Notification' in window)) return;
+    if (Notification.permission === 'default') {
+      // Demander au 1er clic utilisateur (requis par les navigateurs)
+      const ask = () => {
+        Notification.requestPermission().then(p => {
+          console.log('[Notif] Permission:', p);
+        });
+        document.removeEventListener('click', ask);
+      };
+      document.addEventListener('click', ask, { once: true });
+    }
+  },
+
+  // ── Jouer un son d'alerte (Web Audio API — aucun fichier requis) ──
+  _playBeep(type) {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const patterns = {
+        new_order: [[440, 0.12, 0], [660, 0.12, 0.14], [880, 0.18, 0.28]],
+        urgent:    [[880, 0.1, 0],  [880, 0.1, 0.15],  [880, 0.1, 0.30]],
+      };
+      const notes = patterns[type] || patterns.new_order;
+      notes.forEach(([freq, dur, delay]) => {
+        const osc  = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type      = 'sine';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.4, ctx.currentTime + delay);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + delay + dur);
+        osc.start(ctx.currentTime + delay);
+        osc.stop(ctx.currentTime + delay + dur + 0.05);
+      });
+    } catch(e) { /* silence si AudioContext indispo */ }
+  },
+
+  // ── Vibration mobile ─────────────────────────────────────
+  _vibrate() {
+    if ('vibrate' in navigator) {
+      navigator.vibrate([200, 100, 200, 100, 400]);
+    }
+  },
+
+  // ── Notification système (tray / verrouillé) ─────────────
+  _pushSystemNotif(cmd) {
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+    try {
+      const n = new Notification('🔔 Nouvelle commande — ' + cmd.vendeur_nom, {
+        body: cmd.items.map(i => (i.qty > 1 ? '×' + i.qty + ' ' : '') + i.nom).join(', ') + ' | Total : ' + fmtMoney(cmd.total, cmd.devise || 'FCFA'),
+        badge: '/icon-192.png',
+        tag:  'ds-commande-' + cmd.id,
+        requireInteraction: true,
+        vibrate: [200, 100, 200],
+      });
+      n.onclick = () => { window.focus(); Vendeur.showCommandesModal(); n.close(); };
+      // Auto-fermer après 10s
+      setTimeout(() => n.close(), 10000);
+    } catch(e) { console.warn('[Notif] Système:', e.message); }
+  },
+
+  // ── Bannière visuelle flash (toujours visible même sans permission) ──
+  _showBanner(cmd) {
+    const existing = document.getElementById('ds-cmd-banner');
+    if (existing) existing.remove();
+
+    const dev = cmd.devise || 'FCFA';
+    const banner = document.createElement('div');
+    banner.id = 'ds-cmd-banner';
+    banner.style.cssText = [
+      'position:fixed',
+      'top:0','left:0','right:0',
+      'background:linear-gradient(135deg,#E8730C,#BF5A00)',
+      'color:#fff',
+      'z-index:99999',
+      'padding:14px 20px',
+      'display:flex',
+      'align-items:center',
+      'justify-content:space-between',
+      'gap:12px',
+      'box-shadow:0 4px 24px rgba(232,115,12,.6)',
+      'animation:slideDownBanner .35s cubic-bezier(.34,1.56,.64,1)',
+      'cursor:pointer',
+    ].join(';');
+
+    banner.innerHTML = `
+      <div style="display:flex;align-items:center;gap:12px">
+        <span style="font-size:1.6rem;animation:ringBell .5s ease infinite alternate">🔔</span>
+        <div>
+          <div style="font-weight:800;font-size:.95rem">Commande de ${cmd.vendeur_nom}</div>
+          <div style="font-size:.78rem;opacity:.9">${cmd.items.length} article${cmd.items.length > 1 ? 's' : ''} · <strong>${fmtMoney(cmd.total, dev)}</strong></div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button onclick="Vendeur.showCommandesModal();document.getElementById('ds-cmd-banner')?.remove()"
+          style="background:rgba(255,255,255,.25);border:1px solid rgba(255,255,255,.4);color:#fff;border-radius:7px;padding:7px 14px;cursor:pointer;font-weight:700;font-size:.82rem;white-space:nowrap">
+          📋 Voir
+        </button>
+        <button onclick="document.getElementById('ds-cmd-banner')?.remove()"
+          style="background:rgba(0,0,0,.2);border:none;color:#fff;border-radius:7px;padding:7px 10px;cursor:pointer;font-size:.9rem">
+          ✕
+        </button>
+      </div>`;
+
+    banner.onclick = (e) => {
+      if (e.target === banner) { Vendeur.showCommandesModal(); banner.remove(); }
+    };
+
+    // Injecter CSS keyframes si pas encore présents
+    if (!document.getElementById('ds-banner-css')) {
+      const style = document.createElement('style');
+      style.id = 'ds-banner-css';
+      style.textContent = `
+        @keyframes slideDownBanner {
+          from { transform: translateY(-100%); opacity: 0; }
+          to   { transform: translateY(0);     opacity: 1; }
+        }
+        @keyframes ringBell {
+          from { transform: rotate(-15deg); }
+          to   { transform: rotate(15deg); }
+        }`;
+      document.head.appendChild(style);
+    }
+
+    document.body.appendChild(banner);
+
+    // Auto-dismiss après 8s
+    setTimeout(() => {
+      if (document.getElementById('ds-cmd-banner') === banner) {
+        banner.style.animation = 'slideDownBanner .3s reverse';
+        setTimeout(() => banner.remove(), 280);
+      }
+    }, 8000);
   },
 
   _updateUI() {
@@ -9943,13 +10131,34 @@ const Vendeur = {
 
   _onCommandeReceived(cmd) {
     if (!cmd) return;
-    showToast('🔔 Commande de ' + cmd.vendeur_nom + ' — ' + fmtMoney(cmd.total, cmd.devise || 'FCFA'), 'success');
+
+    // 1. Son d'alerte
+    this._playBeep('new_order');
+
+    // 2. Vibration mobile
+    this._vibrate();
+
+    // 3. Bannière visuelle flash (toujours visible)
+    this._showBanner(cmd);
+
+    // 4. Notification système (si permission accordée)
+    this._pushSystemNotif(cmd);
+
+    // 5. Flash du bouton flottant
     const btn = document.getElementById('btn-commandes-recues');
     if (btn) {
       btn.style.display = 'flex';
-      btn.style.transform = 'scale(1.25)';
-      setTimeout(() => { btn.style.transform = ''; }, 400);
+      btn.style.transform = 'scale(1.3)';
+      btn.style.boxShadow = '0 0 0 8px rgba(232,115,12,.3)';
+      setTimeout(() => {
+        btn.style.transform = '';
+        btn.style.boxShadow = '';
+      }, 600);
     }
+
+    // 6. Toast classique
+    showToast('🔔 Commande de ' + cmd.vendeur_nom + ' — ' + fmtMoney(cmd.total, cmd.devise || 'FCFA'), 'success');
+
     this._updateUI();
   },
 
@@ -10066,16 +10275,16 @@ const Vendeur = {
               <span style="font-size:.68rem;color:var(--text-dim)">${new Date(cmd.sent_at).toLocaleTimeString('fr-FR', {hour:'2-digit',minute:'2-digit'})}</span>
             </div>
             <div class="cmd-actions">
-              <button onclick="Vendeur.accepterEtImprimer('${cmd.id}')"
-                style="flex:2;background:var(--accent);color:#fff;border:none;border-radius:var(--rsm);padding:9px;cursor:pointer;font-weight:700;font-size:.8rem;display:flex;align-items:center;justify-content:center;gap:5px">
-                🖨️ Accepter &amp; Imprimer
+              <button onclick="Vendeur.ouvrirCaisse('${cmd.id}')"
+                style="flex:2;background:linear-gradient(135deg,#2ECC71,#27AE60);color:#fff;border:none;border-radius:var(--rsm);padding:10px;cursor:pointer;font-weight:800;font-size:.85rem;display:flex;align-items:center;justify-content:center;gap:6px">
+                💵 Valider &amp; Encaisser
               </button>
               <button onclick="Vendeur.chargerDansCart('${cmd.id}')"
-                style="flex:1;background:rgba(59,130,246,.12);color:#3B82F6;border:1px solid rgba(59,130,246,.3);border-radius:var(--rsm);padding:9px;cursor:pointer;font-size:.78rem;font-weight:700">
-                🛒 Charger
+                style="background:rgba(59,130,246,.12);color:#3B82F6;border:1px solid rgba(59,130,246,.3);border-radius:var(--rsm);padding:10px 12px;cursor:pointer;font-size:.8rem;font-weight:700">
+                🛒
               </button>
               <button onclick="Vendeur.annulerCommande('${cmd.id}')"
-                style="background:rgba(231,76,60,.1);color:#E74C3C;border:1px solid rgba(231,76,60,.3);border-radius:var(--rsm);padding:9px 12px;cursor:pointer;font-size:.85rem">✕</button>
+                style="background:rgba(231,76,60,.1);color:#E74C3C;border:1px solid rgba(231,76,60,.3);border-radius:var(--rsm);padding:10px 12px;cursor:pointer;font-size:.85rem">✕</button>
             </div>
           </div>`;
         }).join('');
@@ -10125,27 +10334,26 @@ const Vendeur = {
     this._savePending(m.id, all);
 
     if (BT.isConnected()) {
-      // Impression BLE directe
-      showToast('🖨️ Impression BLE en cours...', 'success');
+      // Impression BLE directe — 80mm POS-80C (W48 = 48 colonnes)
+      showToast('🖨️ Impression BLE 80mm en cours...', 'success');
       const data = buildEscPos(fakeSale, m, cfg);
       const ok = await BT.send(data);
       if (ok) {
         cmd.statut = 'printed';
         this._savePending(m.id, all);
-        showToast('✅ Ticket imprimé — Vendeur : ' + cmd.vendeur_nom, 'success');
+        showToast('✅ Ticket 80mm imprimé — Vendeur : ' + cmd.vendeur_nom, 'success');
       } else {
         showToast('❌ Échec BLE — ouverture aperçu', 'error');
         window._lastSale = { sale: fakeSale, m, cfg };
-        setPrintFmt('58');
         showInvoice(fakeSale, m, cfg);
       }
     } else {
-      // Pas de BLE : aperçu pour impression manuelle
+      // Pas connecté — ouvrir aperçu, laisser l'utilisateur connecter via bt-print-btn
       window._lastSale = { sale: fakeSale, m, cfg };
-      setPrintFmt('58');
       showInvoice(fakeSale, m, cfg);
-      cmd.statut = 'printed';
+      cmd.statut = 'accepted';
       this._savePending(m.id, all);
+      showToast('📡 Connectez Bluetooth puis cliquez Imprimer', 'success');
     }
 
     document.getElementById('ds-cmds-modal')?.remove();
@@ -10192,6 +10400,261 @@ const Vendeur = {
 
     document.getElementById('ds-cmds-modal')?.remove();
     showToast('🛒 Commande de ' + cmd.vendeur_nom + ' chargée — ' + cmd.items.length + ' article(s)', 'success');
+    this._updateUI();
+  },
+
+
+  // ── Modal caisse : valider, encaisser, enregistrer, imprimer ──
+  ouvrirCaisse(cmdId) {
+    const m = Auth.current(); if (!m) return;
+    const all = this._getPending(m.id);
+    const cmd = all.find(c => c.id === cmdId);
+    if (!cmd) { showToast('Commande introuvable', 'error'); return; }
+
+    const dev = cmd.devise || getConfig()?.devise || 'FCFA';
+    const total = cmd.total;
+
+    // Fermer le modal liste
+    document.getElementById('ds-cmds-modal')?.remove();
+
+    const mo = document.createElement('div');
+    mo.id = 'ds-caisse-modal';
+    mo.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:10000;display:flex;align-items:flex-end;justify-content:center;padding:0';
+
+    mo.innerHTML = `
+      <div style="background:var(--bg2);border-radius:var(--rlg) var(--rlg) 0 0;width:100%;max-width:480px;max-height:95vh;overflow-y:auto;box-shadow:var(--shadow-a)">
+
+        <!-- Poignée -->
+        <div style="width:36px;height:4px;background:var(--border);border-radius:100px;margin:12px auto 0"></div>
+
+        <!-- En-tête -->
+        <div style="padding:16px 20px 0;display:flex;justify-content:space-between;align-items:flex-start">
+          <div>
+            <h3 style="font-family:var(--fh);font-size:1.05rem;margin:0">💵 Encaissement</h3>
+            <div style="font-size:.75rem;color:var(--text-muted);margin-top:3px">
+              <span style="background:rgba(232,115,12,.15);color:var(--accent);border-radius:100px;padding:2px 8px;font-size:.7rem;font-weight:700">👤 ${cmd.vendeur_nom}</span>
+              ${cmd.client_nom && cmd.client_nom !== 'Client' ? ' → ' + cmd.client_nom : ''}
+            </div>
+          </div>
+          <button onclick="document.getElementById('ds-caisse-modal').remove()"
+            style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:1.3rem;line-height:1">✕</button>
+        </div>
+
+        <!-- Articles -->
+        <div style="margin:14px 20px 0;background:var(--surface);border-radius:var(--rsm);overflow:hidden">
+          ${cmd.items.map(i => `
+            <div style="display:flex;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--border);font-size:.82rem">
+              <span>${i.qty > 1 ? '<strong>×' + i.qty + '</strong> ' : ''}${i.nom}</span>
+              <span style="font-weight:600;color:var(--text)">${fmtMoney(i.prix * (i.qty||1), dev)}</span>
+            </div>`).join('')}
+          <div style="display:flex;justify-content:space-between;padding:10px 12px;background:var(--surface2);font-weight:800;font-size:1rem">
+            <span>TOTAL</span>
+            <span style="color:var(--accent)">${fmtMoney(total, dev)}</span>
+          </div>
+        </div>
+
+        <!-- Saisie montant reçu -->
+        <div style="padding:16px 20px 0">
+          <label style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);display:block;margin-bottom:6px">Montant reçu</label>
+          <div style="display:flex;gap:8px;margin-bottom:10px">
+            <input id="cc-received-cmd" type="number" placeholder="${total}" value="${total}"
+              style="flex:1;background:var(--surface);border:2px solid var(--accent);border-radius:var(--rsm);color:var(--text);padding:12px;font-size:1.3rem;font-weight:800;text-align:center"
+              oninput="Vendeur._calcMonnaie(${total},'${dev}')"/>
+          </div>
+
+          <!-- Boutons montants rapides -->
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:12px">
+            ${[500,1000,2000,5000,10000,20000,50000].map(v =>
+              `<button onclick="Vendeur._addMontant(${total},${v},'${dev}')"
+                style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:var(--rsm);padding:8px 4px;cursor:pointer;font-size:.75rem;font-weight:700">
+                +${v >= 1000 ? (v/1000)+'k' : v}
+              </button>`
+            ).join('')}
+          </div>
+
+          <!-- Résultat monnaie -->
+          <div id="cc-monnaie-result" style="min-height:52px;margin-bottom:12px;border-radius:var(--rsm);padding:12px;text-align:center;transition:all .2s">
+            <div style="font-size:.72rem;color:var(--text-dim)">Saisissez le montant reçu</div>
+          </div>
+
+          <!-- Mode de paiement -->
+          <div style="margin-bottom:14px">
+            <label style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);display:block;margin-bottom:6px">Mode de paiement</label>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">
+              ${['💵 Espèces','📱 Mobile Money','💳 Carte'].map((m,i) => `
+                <button id="pm-btn-${i}" onclick="Vendeur._selectPM(${i})"
+                  style="background:${i===0?'var(--accent)':'var(--surface2)'};color:${i===0?'#fff':'var(--text-muted)'};border:1px solid ${i===0?'var(--accent)':'var(--border)'};border-radius:var(--rsm);padding:9px 4px;cursor:pointer;font-size:.75rem;font-weight:700;transition:all .15s">
+                  ${m}
+                </button>`).join('')}
+            </div>
+          </div>
+
+          <!-- Note optionnelle -->
+          <input id="cc-note-cmd" placeholder="Note (optionnel)" maxlength="60"
+            style="width:100%;background:var(--surface);border:1px solid var(--border);border-radius:var(--rsm);color:var(--text);padding:9px 12px;font-size:.82rem;margin-bottom:14px"/>
+
+          <!-- Boutons d'action -->
+          <div style="display:flex;gap:8px;padding-bottom:24px">
+            <button onclick="Vendeur._validerEncaissement('${cmd.id}', false)"
+              style="flex:1;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:var(--rsm);padding:12px;cursor:pointer;font-weight:700;font-size:.85rem">
+              ✅ Valider sans imprimer
+            </button>
+            <button onclick="Vendeur._validerEncaissement('${cmd.id}', true)"
+              style="flex:2;background:linear-gradient(135deg,#2ECC71,#27AE60);color:#fff;border:none;border-radius:var(--rsm);padding:12px;cursor:pointer;font-weight:800;font-size:.9rem">
+              🖨️ Valider &amp; Imprimer
+            </button>
+          </div>
+        </div>
+
+      </div>`;
+
+    // Données de la commande dans le modal
+    mo._cmdId  = cmdId;
+    mo._pm     = 0; // 0=espèces, 1=mobile, 2=carte
+    mo.onclick = e => { if (e.target === mo) mo.remove(); };
+    document.body.appendChild(mo);
+
+    // Calcul initial
+    setTimeout(() => Vendeur._calcMonnaie(total, dev), 100);
+  },
+
+  // ── Sélectionner mode de paiement ────────────────────────
+  _selectPM(idx) {
+    const labels = ['💵 Espèces','📱 Mobile Money','💳 Carte'];
+    labels.forEach((_, i) => {
+      const btn = document.getElementById('pm-btn-' + i);
+      if (!btn) return;
+      btn.style.background = i === idx ? 'var(--accent)' : 'var(--surface2)';
+      btn.style.color      = i === idx ? '#fff' : 'var(--text-muted)';
+      btn.style.borderColor= i === idx ? 'var(--accent)' : 'var(--border)';
+    });
+    const mo = document.getElementById('ds-caisse-modal');
+    if (mo) mo._pm = idx;
+  },
+
+  // ── Ajouter un montant rapide ────────────────────────────
+  _addMontant(total, val, dev) {
+    const inp = document.getElementById('cc-received-cmd');
+    if (!inp) return;
+    const cur = parseFloat(inp.value) || 0;
+    inp.value = cur + val;
+    this._calcMonnaie(total, dev);
+  },
+
+  // ── Calculer la monnaie ──────────────────────────────────
+  _calcMonnaie(total, dev) {
+    const received = parseFloat(document.getElementById('cc-received-cmd')?.value) || 0;
+    const el = document.getElementById('cc-monnaie-result');
+    if (!el) return;
+    if (received === 0) {
+      el.style.background = 'transparent';
+      el.innerHTML = '<div style="font-size:.72rem;color:var(--text-dim)">Saisissez le montant reçu</div>';
+      return;
+    }
+    const change = received - total;
+    if (change < 0) {
+      el.style.background = 'rgba(231,76,60,.1)';
+      el.style.border     = '1px solid rgba(231,76,60,.3)';
+      el.innerHTML = `<div style="color:#E74C3C;font-weight:700;font-size:.9rem">❌ Manque ${fmtMoney(-change, dev)}</div>`;
+    } else {
+      el.style.background = 'rgba(46,204,113,.1)';
+      el.style.border     = '1px solid rgba(46,204,113,.3)';
+      el.innerHTML = `
+        <div style="font-size:.72rem;color:var(--text-muted);margin-bottom:3px">Monnaie à rendre</div>
+        <div style="color:#2ECC71;font-weight:800;font-size:1.5rem">${fmtMoney(change, dev)}</div>`;
+    }
+  },
+
+  // ── Valider et enregistrer la vente ──────────────────────
+  async _validerEncaissement(cmdId, doPrint) {
+    const m = Auth.current(); if (!m) return;
+    const all = this._getPending(m.id);
+    const cmd = all.find(c => c.id === cmdId);
+    if (!cmd) { showToast('Commande introuvable', 'error'); return; }
+
+    const received = parseFloat(document.getElementById('cc-received-cmd')?.value) || cmd.total;
+    const note     = document.getElementById('cc-note-cmd')?.value?.trim() || '';
+    const mo       = document.getElementById('ds-caisse-modal');
+    const pmIdx    = mo?._pm ?? 0;
+    const pmLabels = ['Espèces', 'Mobile Money', 'Carte'];
+    const dev      = cmd.devise || getConfig()?.devise || 'FCFA';
+
+    if (received < cmd.total) {
+      showToast('❌ Montant insuffisant — manque ' + fmtMoney(cmd.total - received, dev), 'error');
+      return;
+    }
+
+    // Construire l'objet vente complet
+    const saleId = 'sale_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
+    const sale = {
+      id:            saleId,
+      client_nom:    cmd.client_nom !== 'Client' ? cmd.client_nom : '',
+      client_wa:     '',
+      vendeur_nom:   cmd.vendeur_nom,
+      items:         cmd.items,
+      total:         cmd.total,
+      montant_recu:  received,
+      monnaie:       received - cmd.total,
+      paiement:      pmLabels[pmIdx],
+      devise:        dev,
+      note:          note,
+      created_at:    new Date().toISOString(),
+      statut:        'completed',
+      source:        'commande_vendeur',
+    };
+
+    // Enregistrer dans la base locale
+    const cfg = getConfig();
+    if (typeof DB !== 'undefined' && typeof DB.add === 'function') {
+      DB.add('sales', m.id, sale);
+    } else {
+      // Fallback direct localStorage
+      const salesKey = 'ds_sales_' + m.id;
+      try {
+        const existing = JSON.parse(localStorage.getItem(salesKey) || '[]');
+        existing.unshift(sale);
+        localStorage.setItem(salesKey, JSON.stringify(existing));
+      } catch(e) {}
+    }
+
+    // Marquer la commande comme validée
+    cmd.statut = 'printed';
+    this._savePending(m.id, all);
+
+    // Fermer le modal caisse
+    document.getElementById('ds-caisse-modal')?.remove();
+
+    const change = received - cmd.total;
+    showToast(
+      '✅ Vente enregistrée' +
+      (change > 0 ? ' — Monnaie : ' + fmtMoney(change, dev) : '') +
+      ' — ' + pmLabels[pmIdx],
+      'success'
+    );
+
+    // Impression
+    if (doPrint) {
+      await new Promise(r => setTimeout(r, 200));
+      if (BT.isConnected()) {
+        // 80mm POS-80C - buildEscPos utilise W48=48 colonnes par défaut
+        const data = buildEscPos(sale, m, cfg);
+        const ok   = await BT.send(data);
+        if (ok) {
+          showToast('🖨️ Ticket 80mm imprimé — Vendeur : ' + sale.vendeur_nom, 'success');
+        } else {
+          showToast('❌ Échec BLE', 'error');
+          // Stocker pour réimpression via bt-print-btn
+          window._lastSale = { sale, m, cfg };
+          showInvoice(sale, m, cfg);
+        }
+      } else {
+        // Pas connecté : ouvrir l'aperçu et afficher un message clair
+        window._lastSale = { sale, m, cfg };
+        showInvoice(sale, m, cfg);
+        showToast('📡 Connectez l\'imprimante Bluetooth puis cliquez Imprimer', 'success');
+      }
+    }
+
     this._updateUI();
   },
 
