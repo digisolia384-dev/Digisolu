@@ -10584,44 +10584,42 @@ const Vendeur = {
       return;
     }
 
-    // Construire l'objet vente complet
-    const saleId = 'sale_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
-    const sale = {
-      id:            saleId,
-      client_nom:    cmd.client_nom !== 'Client' ? cmd.client_nom : '',
-      client_wa:     '',
-      vendeur_nom:   cmd.vendeur_nom,
-      items:         cmd.items,
-      total:         cmd.total,
-      montant_recu:  received,
-      monnaie:       received - cmd.total,
-      paiement:      pmLabels[pmIdx],
-      devise:        dev,
-      note:          note,
-      created_at:    new Date().toISOString(),
-      statut:        'completed',
-      source:        'commande_vendeur',
-    };
-
-    // Enregistrer dans la base locale
+    // ── Enregistrer la vente via DB.insert (identique à processCheckout) ──
     const cfg = getConfig();
-    if (typeof DB !== 'undefined' && typeof DB.add === 'function') {
-      DB.add('sales', m.id, sale);
-    } else {
-      // Fallback direct localStorage
-      const salesKey = 'ds_sales_' + m.id;
-      try {
-        const existing = JSON.parse(localStorage.getItem(salesKey) || '[]');
-        existing.unshift(sale);
-        localStorage.setItem(salesKey, JSON.stringify(existing));
-      } catch(e) {}
-    }
+    const sale = DB.insert('sales', {
+      client_nom:   cmd.client_nom !== 'Client' ? cmd.client_nom : 'Client',
+      client_wa:    '',
+      vendeur_nom:  cmd.vendeur_nom,
+      items:        JSON.parse(JSON.stringify(cmd.items)),
+      total:        cmd.total,
+      montant_recu: received,
+      monnaie:      received - cmd.total,
+      paiement:     pmLabels[pmIdx],
+      devise:       dev,
+      note:         note,
+      statut:       'completed',
+      source:       'commande_vendeur',
+    }, m.id);
 
-    // Marquer la commande comme validée
+    // ── Décrémenter le stock (identique à processCheckout) ──
+    const allP = DB.get('products');
+    cmd.items.forEach(ci => {
+      const idx = allP.findIndex(p => p.id === ci.pid && p.merchant_id === m.id);
+      if (idx !== -1 && allP[idx].stock !== null) {
+        allP[idx].stock = Math.max(0, allP[idx].stock - (ci.qty || 1));
+      }
+    });
+    DB.set('products', allP);
+
+    // ── Sync API arrière-plan ──
+    API.post('sync', { merchant_id: m.id, collection: 'sales',    item:  sale }).catch(()=>{});
+    API.post('sync', { merchant_id: m.id, collection: 'products', items: DB.forM('products', m.id) }).catch(()=>{});
+
+    // ── Marquer commande comme validée ──
     cmd.statut = 'printed';
     this._savePending(m.id, all);
 
-    // Fermer le modal caisse
+    // ── Fermer le modal caisse ──
     document.getElementById('ds-caisse-modal')?.remove();
 
     const change = received - cmd.total;
@@ -10632,26 +10630,26 @@ const Vendeur = {
       'success'
     );
 
-    // Impression
+    // ── Rafraîchir le tableau de bord et les ventes ──
+    if (typeof renderDashboard === 'function') renderDashboard();
+    if (typeof renderSales     === 'function') renderSales();
+
+    // ── Impression (sale = DB.insert result avec id/merchant_id corrects) ──
     if (doPrint) {
+      window._lastSale = { sale, m, cfg };
       await new Promise(r => setTimeout(r, 200));
       if (BT.isConnected()) {
-        // 80mm POS-80C - buildEscPos utilise W48=48 colonnes par défaut
         const data = buildEscPos(sale, m, cfg);
         const ok   = await BT.send(data);
         if (ok) {
-          showToast('🖨️ Ticket 80mm imprimé — Vendeur : ' + sale.vendeur_nom, 'success');
+          showToast('🖨️ Ticket imprimé — Vendeur : ' + sale.vendeur_nom, 'success');
         } else {
-          showToast('❌ Échec BLE', 'error');
-          // Stocker pour réimpression via bt-print-btn
-          window._lastSale = { sale, m, cfg };
+          showToast('❌ Échec BLE — aperçu ouvert', 'error');
           showInvoice(sale, m, cfg);
         }
       } else {
-        // Pas connecté : ouvrir l'aperçu et afficher un message clair
-        window._lastSale = { sale, m, cfg };
         showInvoice(sale, m, cfg);
-        showToast('📡 Connectez l\'imprimante Bluetooth puis cliquez Imprimer', 'success');
+        showToast('📡 Connectez Bluetooth puis cliquez Imprimer', 'success');
       }
     }
 
@@ -10799,5 +10797,8 @@ document.addEventListener('DOMContentLoaded', async () => {  console.log('🚀 D
 
 </body>
 </html>
+
+
+
 
 
