@@ -6774,6 +6774,10 @@ API.post = async function(endpoint, body) {
 // ============================================================
 function _startRealtimeListeners(merchantId) {
   if (!window._fbDb || !merchantId) return;
+  // Redémarrer le listener Vendeur avec Firebase (si init() a démarré en polling)
+  if (typeof Vendeur !== 'undefined') {
+    if (!Vendeur._fbUnsub) Vendeur._startFirebaseListener(merchantId);
+  }
 
   // Guard: déjà actif pour le MÊME marchand — éviter double-bind
   if (_fbSyncActive && _fbCurrentMerchantId === merchantId && FB._unsubs && FB._unsubs.length > 0) {
@@ -9894,6 +9898,7 @@ const Vendeur = {
 
   _cmdKey(mid)  { return 'ds_cmds_' + mid; },
   _pollTimer:   null,
+  _fbUnsub:     null,   // Firestore listener unsubscribe
 
   // ── Nom du vendeur ───────────────────────────────────────
   save() {
@@ -9918,6 +9923,107 @@ const Vendeur = {
     localStorage.setItem(this._cmdKey(mid), JSON.stringify(arr.slice(0, 50)));
   },
 
+  // ── Sauvegarder une commande dans Firestore ──────────────
+  async _fbSaveCommande(cmd) {
+    if (!FB.ready()) return false;
+    try {
+      await window._fbDb.collection('commandes').doc(cmd.id).set(cmd);
+      return true;
+    } catch(e) {
+      console.warn('[Vendeur] Firestore write:', e.message);
+      return false;
+    }
+  },
+
+  // ── Mettre à jour le statut dans Firestore ───────────────
+  async _fbUpdateStatut(cmdId, statut) {
+    if (!FB.ready()) return;
+    try {
+      await window._fbDb.collection('commandes').doc(cmdId).update({
+        statut, updated_at: new Date().toISOString()
+      });
+    } catch(e) { console.warn('[Vendeur] Firestore update statut:', e.message); }
+  },
+
+  // ── Démarrer l'écoute Firestore temps réel ───────────────
+  _startFirebaseListener(mid) {
+    if (!FB.ready()) return;
+
+    // Nettoyer l'ancien listener
+    if (this._fbUnsub) { try { this._fbUnsub(); } catch(e) {} this._fbUnsub = null; }
+
+    console.log('[Vendeur] Démarrage listener Firestore commandes pour', mid);
+
+    let initialized = false;
+    let knownIds = new Set(this._getPending(mid).map(c => c.id));
+
+    try {
+      this._fbUnsub = window._fbDb
+        .collection('commandes')
+        .where('merchant_id', '==', mid)
+        .where('statut', 'in', ['pending', 'accepted'])
+        .orderBy('sent_at', 'desc')
+        .limit(30)
+        .onSnapshot(snap => {
+          const cmds = snap.docs.map(d => ({ ...d.data(), id: d.id }));
+
+          // Synchroniser localStorage avec Firestore
+          const local = this._getPending(mid).filter(c => !cmds.find(f => f.id === c.id));
+          const merged = [...cmds, ...local].slice(0, 50);
+          this._savePending(mid, merged);
+
+          if (!initialized) {
+            initialized = true;
+            cmds.forEach(c => knownIds.add(c.id));
+            this._updateUI();
+            return;
+          }
+
+          // Détecter nouvelles commandes
+          const newCmds = cmds.filter(c => !knownIds.has(c.id) && c.statut === 'pending');
+          newCmds.forEach(cmd => {
+            knownIds.add(cmd.id);
+            this._onCommandeReceived(cmd);
+          });
+
+          this._updateUI();
+        }, err => {
+          console.warn('[Vendeur] onSnapshot error:', err.message);
+          // Fallback polling si onSnapshot échoue
+          if (!this._pollTimer) this._startPolling(mid);
+        });
+
+      console.log('[Vendeur] ✅ Listener Firestore actif');
+    } catch(e) {
+      console.warn('[Vendeur] Firestore listener failed:', e.message);
+      this._startPolling(mid);
+    }
+  },
+
+  // ── Polling localStorage fallback (même appareil / hors-ligne) ──
+  _startPolling(mid) {
+    if (this._pollTimer) return; // déjà actif
+    let knownIds = new Set(this._getPending(mid).map(c => c.id));
+    let initialized = false;
+
+    this._pollTimer = setInterval(() => {
+      const m = Auth.current();
+      if (!m) return;
+      const cmds = this._getPending(m.id).filter(c => c.statut === 'pending');
+
+      if (!initialized) {
+        cmds.forEach(c => knownIds.add(c.id));
+        initialized = true;
+        this._updateUI();
+        return;
+      }
+
+      const newCmds = cmds.filter(c => !knownIds.has(c.id));
+      newCmds.forEach(cmd => { knownIds.add(cmd.id); this._onCommandeReceived(cmd); });
+      this._updateUI();
+    }, 2000);
+  },
+
   // ── Init ─────────────────────────────────────────────────
   init() {
     // Restaurer prénom mémorisé
@@ -9925,7 +10031,7 @@ const Vendeur = {
     const input = document.getElementById('cart-vendeur-nom');
     if (saved && input) input.value = saved;
 
-    // Demander permission notifications système au premier usage
+    // Demander permission notifications système
     this._requestNotifPermission();
 
     // BroadcastChannel : temps réel entre onglets du même appareil
@@ -9939,40 +10045,30 @@ const Vendeur = {
           }
         };
         this._bc = bc;
-      } catch(e) { console.warn('[Vendeur] BroadcastChannel:', e.message); }
+      } catch(e) {}
     }
 
-    // Polling localStorage toutes les 2s (multi-appareil même stockage)
-    let lastKnownIds = new Set();
-    let initialized  = false;
-
-    this._pollTimer = setInterval(() => {
-      const m = Auth.current();
-      if (!m) return;
-      const cmds    = this._getPending(m.id);
-      const pending = cmds.filter(c => c.statut === 'pending');
-
-      // Initialisation silencieuse au 1er passage
-      if (!initialized) {
-        pending.forEach(c => lastKnownIds.add(c.id));
-        initialized = true;
-        this._updateUI();
-        return;
+    const m = Auth.current();
+    if (m) {
+      if (FB.ready()) {
+        // ✅ Firebase dispo → listener temps réel multi-appareils
+        this._startFirebaseListener(m.id);
+      } else {
+        // ⏳ Firebase pas encore prêt → attendre max 5s puis fallback polling
+        let waited = 0;
+        const checkFB = setInterval(() => {
+          waited += 500;
+          if (FB.ready()) {
+            clearInterval(checkFB);
+            this._startFirebaseListener(m.id);
+          } else if (waited >= 5000) {
+            clearInterval(checkFB);
+            console.warn('[Vendeur] Firebase indisponible — mode polling localStorage');
+            this._startPolling(m.id);
+          }
+        }, 500);
       }
-
-      // Détecter les NOUVELLES commandes (ID pas encore vu)
-      const newCmds = pending.filter(c => !lastKnownIds.has(c.id));
-      newCmds.forEach(cmd => {
-        lastKnownIds.add(cmd.id);
-        this._onCommandeReceived(cmd);
-      });
-
-      // Nettoyer les IDs qui ne sont plus pending
-      const currentIds = new Set(pending.map(c => c.id));
-      lastKnownIds.forEach(id => { if (!currentIds.has(id)) lastKnownIds.delete(id); });
-
-      this._updateUI();
-    }, 2000);
+    }
 
     this._updateUI();
   },
@@ -10204,19 +10300,27 @@ const Vendeur = {
       merchant_id: m.id,
     };
 
-    // Persister dans localStorage
+    // ── localStorage immédiat (même appareil) ──────────────
     const all = this._getPending(m.id);
     all.unshift(commande);
     this._savePending(m.id, all);
 
-    // Notifier via BroadcastChannel (même appareil)
-    if (this._bc) {
-      try {
-        this._bc.postMessage({ type: 'new_commande', merchant_id: m.id, commande });
-      } catch(e) {}
+    // ── Firestore → temps réel multi-appareils ───────────
+    if (FB.ready()) {
+      this._fbSaveCommande(commande).then(ok => {
+        console.log('[Vendeur] Firestore:', ok ? '✅ envoyé' : '❌ échoué');
+      });
+    } else {
+      console.warn('[Vendeur] Firebase indisponible — localStorage seulement');
     }
 
-    showToast('📤 Commande envoyée par ' + nomVendeur + ' (' + items.length + ' article' + (items.length > 1 ? 's' : '') + ' — ' + fmtMoney(total, dev) + ')', 'success');
+    // ── BroadcastChannel (même appareil, onglets différents) ──
+    if (this._bc) {
+      try { this._bc.postMessage({ type: 'new_commande', merchant_id: m.id, commande }); }
+      catch(e) {}
+    }
+
+    showToast('📤 Commande de ' + nomVendeur + ' envoyée (' + items.length + ' article' + (items.length > 1 ? 's' : '') + ' — ' + fmtMoney(total, dev) + ')', 'success');
     this._updateUI();
 
     // Vider le panier proprement
@@ -10341,6 +10445,7 @@ const Vendeur = {
       if (ok) {
         cmd.statut = 'printed';
         this._savePending(m.id, all);
+        this._fbUpdateStatut(cmd.id, 'printed');
         showToast('✅ Ticket 80mm imprimé — Vendeur : ' + cmd.vendeur_nom, 'success');
       } else {
         showToast('❌ Échec BLE — ouverture aperçu', 'error');
@@ -10615,9 +10720,10 @@ const Vendeur = {
     API.post('sync', { merchant_id: m.id, collection: 'sales',    item:  sale }).catch(()=>{});
     API.post('sync', { merchant_id: m.id, collection: 'products', items: DB.forM('products', m.id) }).catch(()=>{});
 
-    // ── Marquer commande comme validée ──
+    // ── Marquer commande comme validée (localStorage + Firestore) ──
     cmd.statut = 'printed';
     this._savePending(m.id, all);
+    this._fbUpdateStatut(cmd.id, 'printed');
 
     // ── Fermer le modal caisse ──
     document.getElementById('ds-caisse-modal')?.remove();
@@ -10661,6 +10767,12 @@ const Vendeur = {
     const m = Auth.current(); if (!m) return;
     const all = this._getPending(m.id).filter(c => c.id !== cmdId);
     this._savePending(m.id, all);
+    // Supprimer dans Firestore aussi
+    if (FB.ready()) {
+      window._fbDb.collection('commandes').doc(cmdId).delete().catch(e =>
+        console.warn('[Vendeur] Firestore delete:', e.message)
+      );
+    }
     document.getElementById('ds-cmds-modal')?.remove();
     this._updateUI();
     showToast('Commande supprimée', 'success');
@@ -10797,8 +10909,5 @@ document.addEventListener('DOMContentLoaded', async () => {  console.log('🚀 D
 
 </body>
 </html>
-
-
-
 
 
