@@ -9859,10 +9859,10 @@ function checkMerchantSubscription(mid) {
 
 const Vendeur = {
 
-  // ── Clé de stockage des commandes en attente ─────────────
-  _cmdKey(mid) { return 'ds_cmds_' + mid; },
+  _cmdKey(mid)  { return 'ds_cmds_' + mid; },
+  _pollTimer:   null,
 
-  // ── Sauvegarder/lire le nom du vendeur courant ───────────
+  // ── Nom du vendeur ───────────────────────────────────────
   save() {
     const nom = document.getElementById('cart-vendeur-nom')?.value?.trim();
     if (!nom) { showToast('✏️ Saisissez votre prénom', 'error'); return; }
@@ -9871,167 +9871,211 @@ const Vendeur = {
   },
 
   getNom() {
-    return document.getElementById('cart-vendeur-nom')?.value?.trim()
-      || localStorage.getItem('ds_vendeur_nom')
-      || '';
+    return (document.getElementById('cart-vendeur-nom')?.value?.trim())
+        || localStorage.getItem('ds_vendeur_nom')
+        || '';
   },
 
-  // ── Init : restaurer le prénom mémorisé ──────────────────
+  // ── Commandes ─────────────────────────────────────────────
+  _getPending(mid) {
+    try { return JSON.parse(localStorage.getItem(this._cmdKey(mid)) || '[]'); }
+    catch { return []; }
+  },
+  _savePending(mid, arr) {
+    localStorage.setItem(this._cmdKey(mid), JSON.stringify(arr.slice(0, 50)));
+  },
+
+  // ── Init ─────────────────────────────────────────────────
   init() {
+    // Restaurer prénom mémorisé
     const saved = localStorage.getItem('ds_vendeur_nom');
     const input = document.getElementById('cart-vendeur-nom');
     if (saved && input) input.value = saved;
 
-    // Écouter les commandes entrantes via BroadcastChannel
+    // BroadcastChannel : notification temps réel (même appareil, onglets différents)
     if (typeof BroadcastChannel !== 'undefined') {
-      const bc = new BroadcastChannel('ds_commandes');
-      bc.onmessage = (e) => {
-        if (e.data?.type === 'new_commande') {
+      try {
+        const bc = new BroadcastChannel('ds_commandes');
+        bc.onmessage = (e) => {
           const m = Auth.current();
-          if (m && e.data.merchant_id === m.id) {
-            Vendeur._onCommandeReceived(e.data.commande);
+          if (e.data?.type === 'new_commande' && m && e.data.merchant_id === m.id) {
+            this._onCommandeReceived(e.data.commande);
           }
-        }
-      };
+        };
+        this._bc = bc;
+      } catch(e) { console.warn('[Vendeur] BroadcastChannel indisponible:', e.message); }
     }
 
-    // Afficher/masquer le bouton flottant selon le rôle
+    // Polling localStorage toutes les 3s (fallback multi-appareil même réseau)
+    let lastCount = -1;
+    this._pollTimer = setInterval(() => {
+      const m = Auth.current();
+      if (!m) return;
+      const cmds = this._getPending(m.id);
+      const pending = cmds.filter(c => c.statut === 'pending').length;
+      if (pending !== lastCount) {
+        lastCount = pending;
+        this._updateUI();
+        if (pending > lastCount && lastCount >= 0) {
+          const newest = cmds[0];
+          if (newest) this._onCommandeReceived(newest);
+        }
+      }
+    }, 3000);
+
     this._updateUI();
   },
 
   _updateUI() {
-    const m = Auth.current();
-    if (!m) return;
-    const pending = this._getPending(m.id);
-    // Bouton flottant caissière — visible si commandes en attente
-    const btnFloat = document.getElementById('btn-commandes-recues');
-    if (btnFloat) {
-      btnFloat.style.display = pending.length > 0 ? 'flex' : 'none';
-    }
+    const m = Auth.current(); if (!m) return;
+    const cmds    = this._getPending(m.id);
+    const pending = cmds.filter(c => c.statut === 'pending').length;
+
+    const btn = document.getElementById('btn-commandes-recues');
+    if (btn) btn.style.display = pending > 0 ? 'flex' : 'none';
+
     const badge = document.getElementById('cmd-in-badge');
     if (badge) {
-      badge.textContent = pending.length;
-      badge.style.display = pending.length > 0 ? 'flex' : 'none';
+      badge.textContent = pending;
+      badge.style.display = pending > 0 ? 'flex' : 'none';
     }
   },
 
-  // ── Envoyer la commande courante du panier ───────────────
+  _onCommandeReceived(cmd) {
+    if (!cmd) return;
+    showToast('🔔 Commande de ' + cmd.vendeur_nom + ' — ' + fmtMoney(cmd.total, cmd.devise || 'FCFA'), 'success');
+    const btn = document.getElementById('btn-commandes-recues');
+    if (btn) {
+      btn.style.display = 'flex';
+      btn.style.transform = 'scale(1.25)';
+      setTimeout(() => { btn.style.transform = ''; }, 400);
+    }
+    this._updateUI();
+  },
+
+  // ── Envoyer la commande depuis le panier ─────────────────
   sendCommande() {
     const m = Auth.current(); if (!m) return;
-    if (!cart || cart.length === 0) { showToast('⚠️ Panier vide', 'error'); return; }
+
+    if (typeof cart === 'undefined' || !cart || cart.length === 0) {
+      showToast('⚠️ Panier vide — ajoutez des articles', 'error');
+      return;
+    }
 
     const nomVendeur = this.getNom();
     if (!nomVendeur) {
-      showToast('✏️ Saisissez votre prénom vendeur avant d\'envoyer', 'error');
+      showToast('✏️ Saisissez votre prénom dans le champ vendeur', 'error');
       document.getElementById('cart-vendeur-nom')?.focus();
       return;
     }
 
-    const cfg = getConfig();
-    const dev = cfg?.devise || 'FCFA';
+    const cfg    = getConfig();
+    const dev    = cfg?.devise || 'FCFA';
     const cliNom = document.getElementById('cart-cli-nom')?.value?.trim() || '';
-    const total  = cartTotal ? cartTotal() : cart.reduce((t,i) => t + (i.prix * (i.qty||1)), 0);
+    const total  = (typeof cartTotal === 'function') ? cartTotal()
+                 : cart.reduce((t, i) => t + (i.prix * (i.qty || 1)), 0);
+
+    // Snapshot complet du panier avec quantités
+    const items = cart.map(i => ({
+      pid:   i.pid || '',
+      nom:   i.nom,
+      prix:  i.prix,
+      qty:   i.qty || 1,
+    }));
 
     const commande = {
-      id: 'cmd_' + Date.now() + '_' + Math.random().toString(36).slice(2,5),
+      id:          'cmd_' + Date.now() + '_' + Math.random().toString(36).slice(2, 5),
       vendeur_nom: nomVendeur,
       client_nom:  cliNom || 'Client',
-      items:       JSON.parse(JSON.stringify(cart)),
+      items,
       total,
       devise:      dev,
       sent_at:     new Date().toISOString(),
-      statut:      'pending', // pending | accepted | printed | cancelled
+      statut:      'pending',
       merchant_id: m.id,
     };
 
-    // Sauvegarder localement
+    // Persister dans localStorage
     const all = this._getPending(m.id);
     all.unshift(commande);
-    localStorage.setItem(this._cmdKey(m.id), JSON.stringify(all.slice(0, 50)));
+    this._savePending(m.id, all);
 
-    // Diffuser via BroadcastChannel (même appareil, plusieurs onglets)
-    if (typeof BroadcastChannel !== 'undefined') {
-      const bc = new BroadcastChannel('ds_commandes');
-      bc.postMessage({ type: 'new_commande', merchant_id: m.id, commande });
+    // Notifier via BroadcastChannel (même appareil)
+    if (this._bc) {
+      try {
+        this._bc.postMessage({ type: 'new_commande', merchant_id: m.id, commande });
+      } catch(e) {}
     }
 
-    showToast('📤 Commande de ' + nomVendeur + ' envoyée — ' + cart.length + ' article(s)', 'success');
+    showToast('📤 Commande envoyée par ' + nomVendeur + ' (' + items.length + ' article' + (items.length > 1 ? 's' : '') + ' — ' + fmtMoney(total, dev) + ')', 'success');
     this._updateUI();
 
-    // Optionnel : vider le panier après envoi
-    if (confirm('Commande envoyée ! Vider le panier ?')) {
+    // Vider le panier proprement
+    if (typeof clearCart === 'function') {
       clearCart();
       if (typeof renderPOS === 'function') renderPOS();
     }
   },
 
-  // ── Recevoir une commande (notification) ─────────────────
-  _onCommandeReceived(cmd) {
-    showToast('🔔 Nouvelle commande de ' + cmd.vendeur_nom + ' — ' + fmtMoney(cmd.total, cmd.devise), 'success');
-    this._updateUI();
-    // Flash le bouton flottant
-    const btn = document.getElementById('btn-commandes-recues');
-    if (btn) {
-      btn.style.transform = 'scale(1.2)';
-      setTimeout(() => btn.style.transform = '', 400);
-    }
-  },
-
-  // ── Récupérer commandes en attente ───────────────────────
-  _getPending(mid) {
-    try { return JSON.parse(localStorage.getItem(this._cmdKey(mid)) || '[]'); } catch { return []; }
-  },
-
-  // ── Modal commandes (vue caissière) ──────────────────────
+  // ── Modal liste des commandes (vue caissière) ────────────
   showCommandesModal() {
     const m = Auth.current(); if (!m) return;
     const cmds = this._getPending(m.id);
     const dev  = getConfig()?.devise || 'FCFA';
 
-    const existing = document.getElementById('ds-cmds-modal');
-    if (existing) existing.remove();
+    document.getElementById('ds-cmds-modal')?.remove();
+
+    const fmtElapsed = (iso) => {
+      const min = Math.round((Date.now() - new Date(iso)) / 60000);
+      if (min < 1)  return 'À l\'instant';
+      if (min < 60) return min + ' min';
+      return Math.round(min / 60) + 'h' + (min % 60 > 0 ? (min%60) + 'min' : '');
+    };
+
+    const statusMap = {
+      pending:   { label: '⏳ En attente', color: '#F39C12' },
+      accepted:  { label: '✅ Acceptée',   color: '#3B82F6' },
+      printed:   { label: '🖨️ Imprimée',   color: '#2ECC71' },
+      cancelled: { label: '✕ Annulée',     color: '#E74C3C' },
+    };
 
     const listHTML = cmds.length === 0
-      ? '<p style="color:var(--text-dim);text-align:center;padding:24px 0;font-size:.85rem">Aucune commande en attente.</p>'
+      ? '<p style="color:var(--text-dim);text-align:center;padding:28px 0;font-size:.85rem">✅ Aucune commande en attente.</p>'
       : cmds.map(cmd => {
-          const elapsed = Math.round((Date.now() - new Date(cmd.sent_at)) / 60000);
-          const statusColors = { pending:'#F39C12', accepted:'#3B82F6', printed:'#2ECC71', cancelled:'#E74C3C' };
-          const statusLabels = { pending:'En attente', accepted:'Acceptée', printed:'Imprimée', cancelled:'Annulée' };
-          const col = statusColors[cmd.statut] || '#94A3B8';
-          const lbl = statusLabels[cmd.statut] || cmd.statut;
-          const itemsHTML = cmd.items.map(i =>
-            `<div class="cmd-item-rows">${i.qty > 1 ? '×'+i.qty+' ' : ''}${i.nom} — <strong>${fmtMoney(i.prix*(i.qty||1), dev)}</strong></div>`
+          const st   = statusMap[cmd.statut] || statusMap.pending;
+          const rows = cmd.items.map(i =>
+            `<div class="cmd-item-rows">${i.qty > 1 ? '<strong>×' + i.qty + '</strong> ' : ''}${i.nom}<span style="float:right;color:var(--text)">${fmtMoney(i.prix * (i.qty||1), dev)}</span></div>`
           ).join('');
-          return `<div class="cmd-item" id="cmd-${cmd.id}">
+          return `
+          <div class="cmd-item" id="cmd-${cmd.id}">
             <div class="cmd-item-hdr">
-              <div>
+              <div style="display:flex;flex-direction:column;gap:3px">
                 <span class="cmd-vendeur-tag">👤 ${cmd.vendeur_nom}</span>
                 ${cmd.client_nom && cmd.client_nom !== 'Client'
-                  ? `<span style="font-size:.72rem;color:var(--text-muted);margin-left:6px">→ ${cmd.client_nom}</span>`
+                  ? `<span style="font-size:.7rem;color:var(--text-muted)">→ Client : ${cmd.client_nom}</span>`
                   : ''}
               </div>
               <div style="text-align:right">
-                <div style="font-weight:800;color:var(--accent)">${fmtMoney(cmd.total, dev)}</div>
-                <div style="font-size:.65rem;color:var(--text-dim)">${elapsed < 1 ? 'À l\'instant' : elapsed + ' min'}</div>
+                <div style="font-weight:800;color:var(--accent);font-size:1.05rem">${fmtMoney(cmd.total, dev)}</div>
+                <div style="font-size:.65rem;color:var(--text-dim)">${fmtElapsed(cmd.sent_at)}</div>
               </div>
             </div>
-            ${itemsHTML}
-            <div style="margin-top:6px">
-              <span style="background:${col}22;color:${col};border-radius:100px;padding:2px 8px;font-size:.68rem;font-weight:700">${lbl}</span>
+            <div style="background:var(--surface);border-radius:var(--rsm);padding:8px;margin:6px 0">${rows}</div>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+              <span style="background:${st.color}22;color:${st.color};border-radius:100px;padding:2px 8px;font-size:.68rem;font-weight:700">${st.label}</span>
+              <span style="font-size:.68rem;color:var(--text-dim)">${new Date(cmd.sent_at).toLocaleTimeString('fr-FR', {hour:'2-digit',minute:'2-digit'})}</span>
             </div>
             <div class="cmd-actions">
               <button onclick="Vendeur.accepterEtImprimer('${cmd.id}')"
-                style="flex:2;background:var(--accent);color:#fff;border:none;border-radius:var(--rsm);padding:8px;cursor:pointer;font-weight:700;font-size:.8rem">
-                🖨️ Accepter & Imprimer
+                style="flex:2;background:var(--accent);color:#fff;border:none;border-radius:var(--rsm);padding:9px;cursor:pointer;font-weight:700;font-size:.8rem;display:flex;align-items:center;justify-content:center;gap:5px">
+                🖨️ Accepter &amp; Imprimer
               </button>
               <button onclick="Vendeur.chargerDansCart('${cmd.id}')"
-                style="flex:1;background:rgba(59,130,246,.12);color:#3B82F6;border:1px solid rgba(59,130,246,.3);border-radius:var(--rsm);padding:8px;cursor:pointer;font-size:.78rem;font-weight:700">
+                style="flex:1;background:rgba(59,130,246,.12);color:#3B82F6;border:1px solid rgba(59,130,246,.3);border-radius:var(--rsm);padding:9px;cursor:pointer;font-size:.78rem;font-weight:700">
                 🛒 Charger
               </button>
               <button onclick="Vendeur.annulerCommande('${cmd.id}')"
-                style="background:rgba(231,76,60,.1);color:#E74C3C;border:1px solid rgba(231,76,60,.3);border-radius:var(--rsm);padding:8px 10px;cursor:pointer;font-size:.8rem">
-                ✕
-              </button>
+                style="background:rgba(231,76,60,.1);color:#E74C3C;border:1px solid rgba(231,76,60,.3);border-radius:var(--rsm);padding:9px 12px;cursor:pointer;font-size:.85rem">✕</button>
             </div>
           </div>`;
         }).join('');
@@ -10040,10 +10084,14 @@ const Vendeur = {
     mo.id = 'ds-cmds-modal';
     mo.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:9999;display:flex;align-items:flex-end;justify-content:center;padding:0';
     mo.innerHTML = `
-      <div style="background:var(--bg2);border-radius:var(--rlg) var(--rlg) 0 0;width:100%;max-width:520px;max-height:85vh;overflow-y:auto;padding:20px;box-shadow:var(--shadow-a)">
+      <div style="background:var(--bg2);border-radius:var(--rlg) var(--rlg) 0 0;width:100%;max-width:540px;max-height:88vh;overflow-y:auto;padding:20px 20px 32px;box-shadow:var(--shadow-a)">
+        <div style="width:36px;height:4px;background:var(--border);border-radius:100px;margin:0 auto 16px"></div>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-          <h3 style="font-family:var(--fh)">📋 Commandes reçues <span style="background:var(--accent);color:#fff;border-radius:100px;padding:2px 8px;font-size:.7rem;margin-left:6px">${cmds.length}</span></h3>
-          <button onclick="document.getElementById('ds-cmds-modal').remove()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:1.3rem">✕</button>
+          <h3 style="font-family:var(--fh);font-size:1.05rem">
+            📋 Commandes reçues
+            <span style="background:var(--accent);color:#fff;border-radius:100px;padding:2px 8px;font-size:.7rem;margin-left:6px">${cmds.length}</span>
+          </h3>
+          <button onclick="document.getElementById('ds-cmds-modal').remove()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:1.3rem;line-height:1">✕</button>
         </div>
         ${listHTML}
       </div>`;
@@ -10051,177 +10099,164 @@ const Vendeur = {
     document.body.appendChild(mo);
   },
 
-  // ── Accepter + imprimer BLE directement ──────────────────
+  // ── Accepter + imprimer directement ─────────────────────
   async accepterEtImprimer(cmdId) {
     const m = Auth.current(); if (!m) return;
-    const all  = this._getPending(m.id);
-    const cmd  = all.find(c => c.id === cmdId); if (!cmd) return;
-    const cfg  = getConfig();
+    const all = this._getPending(m.id);
+    const cmd = all.find(c => c.id === cmdId);
+    if (!cmd) { showToast('Commande introuvable', 'error'); return; }
 
-    // Créer une vente temporaire pour buildEscPos
+    const cfg = getConfig();
+
+    // Construire un objet sale compatible avec buildEscPos/buildThermalInvoice
     const fakeSale = {
-      id: cmd.id,
-      client_nom:   cmd.client_nom,
-      client_wa:    '',
-      items:        cmd.items,
-      total:        cmd.total,
-      devise:       cmd.devise,
-      vendeur_nom:  cmd.vendeur_nom,
-      created_at:   cmd.sent_at,
-      statut:       'completed',
+      id:          cmd.id,
+      client_nom:  cmd.client_nom,
+      client_wa:   '',
+      items:       cmd.items,
+      total:       cmd.total,
+      devise:      cmd.devise,
+      vendeur_nom: cmd.vendeur_nom,
+      created_at:  cmd.sent_at,
+      statut:      'completed',
     };
 
-    // Marquer comme acceptée
     cmd.statut = 'accepted';
-    localStorage.setItem(this._cmdKey(m.id), JSON.stringify(all));
+    this._savePending(m.id, all);
 
-    // Impression BLE
     if (BT.isConnected()) {
+      // Impression BLE directe
+      showToast('🖨️ Impression BLE en cours...', 'success');
       const data = buildEscPos(fakeSale, m, cfg);
       const ok = await BT.send(data);
       if (ok) {
         cmd.statut = 'printed';
-        localStorage.setItem(this._cmdKey(m.id), JSON.stringify(all));
-        showToast('🖨️ Ticket imprimé — vendeur: ' + cmd.vendeur_nom, 'success');
+        this._savePending(m.id, all);
+        showToast('✅ Ticket imprimé — Vendeur : ' + cmd.vendeur_nom, 'success');
       } else {
-        showToast('❌ Échec impression BLE', 'error');
+        showToast('❌ Échec BLE — ouverture aperçu', 'error');
+        window._lastSale = { sale: fakeSale, m, cfg };
+        setPrintFmt('58');
+        showInvoice(fakeSale, m, cfg);
       }
     } else {
-      // Pas de BLE : afficher la facture pour impression manuelle
+      // Pas de BLE : aperçu pour impression manuelle
       window._lastSale = { sale: fakeSale, m, cfg };
       setPrintFmt('58');
       showInvoice(fakeSale, m, cfg);
       cmd.statut = 'printed';
-      localStorage.setItem(this._cmdKey(m.id), JSON.stringify(all));
+      this._savePending(m.id, all);
     }
 
     document.getElementById('ds-cmds-modal')?.remove();
     this._updateUI();
   },
 
-  // ── Charger la commande dans le panier actif ─────────────
+  // ── Charger commande dans le panier ─────────────────────
   chargerDansCart(cmdId) {
     const m = Auth.current(); if (!m) return;
     const all = this._getPending(m.id);
-    const cmd = all.find(c => c.id === cmdId); if (!cmd) return;
+    const cmd = all.find(c => c.id === cmdId);
+    if (!cmd) return;
 
-    // Charger les articles
+    // Vider le panier actuel
     if (typeof clearCart === 'function') clearCart();
+
+    // Charger les articles directement dans `cart` (array global)
     cmd.items.forEach(item => {
-      if (typeof addToCart === 'function') {
-        addToCart({ pid: item.product_id || '', nom: item.nom, prix: item.prix, qty: item.qty || 1 });
+      const ex = cart.find(i => i.pid === item.pid && i.nom === item.nom);
+      if (ex) {
+        ex.qty += (item.qty || 1);
+      } else {
+        cart.push({
+          pid:  item.pid || '',
+          nom:  item.nom,
+          prix: item.prix,
+          qty:  item.qty || 1,
+        });
       }
     });
 
-    // Remplir le nom vendeur
-    const input = document.getElementById('cart-vendeur-nom');
-    if (input) input.value = cmd.vendeur_nom;
+    // Remplir nom vendeur et client
+    const vi = document.getElementById('cart-vendeur-nom');
+    if (vi) vi.value = cmd.vendeur_nom;
+    const ci = document.getElementById('cart-cli-nom');
+    if (ci && cmd.client_nom !== 'Client') ci.value = cmd.client_nom;
 
-    // Remplir le client
-    const cliNom = document.getElementById('cart-cli-nom');
-    if (cliNom) cliNom.value = cmd.client_nom !== 'Client' ? cmd.client_nom : '';
-
-    if (typeof renderPOS === 'function') renderPOS();
-    document.getElementById('ds-cmds-modal')?.remove();
-    showToast('🛒 Commande de ' + cmd.vendeur_nom + ' chargée dans le panier', 'success');
+    if (typeof renderCart === 'function') renderCart();
+    if (typeof renderPOS  === 'function') renderPOS();
 
     // Marquer comme acceptée
     cmd.statut = 'accepted';
-    localStorage.setItem(this._cmdKey(m.id), JSON.stringify(all));
+    this._savePending(m.id, all);
+
+    document.getElementById('ds-cmds-modal')?.remove();
+    showToast('🛒 Commande de ' + cmd.vendeur_nom + ' chargée — ' + cmd.items.length + ' article(s)', 'success');
     this._updateUI();
   },
 
-  // ── Annuler une commande ──────────────────────────────────
+  // ── Annuler ──────────────────────────────────────────────
   annulerCommande(cmdId) {
     const m = Auth.current(); if (!m) return;
-    const all = this._getPending(m.id);
-    const updated = all.filter(c => c.id !== cmdId);
-    localStorage.setItem(this._cmdKey(m.id), JSON.stringify(updated));
+    const all = this._getPending(m.id).filter(c => c.id !== cmdId);
+    this._savePending(m.id, all);
     document.getElementById('ds-cmds-modal')?.remove();
     this._updateUI();
-    showToast('✕ Commande annulée', 'success');
+    showToast('Commande supprimée', 'success');
   },
 };
 
-// ── Patch buildEscPos pour inclure le nom vendeur ────────────
-const _origBuildEscPos2 = buildEscPos;
+// ── Patch buildThermalInvoice — ligne Vendeur ────────────────
+const _origBuildThermal = typeof buildThermalInvoice === 'function' ? buildThermalInvoice : null;
+buildThermalInvoice = function(sale, m, cfg, num, ds, dev, waNum, fmt) {
+  let html = _origBuildThermal ? _origBuildThermal(sale, m, cfg, num, ds, dev, waNum, fmt) : '';
+  if (!sale.vendeur_nom) return html;
+  const anchor = '<strong>TICKET DE CAISSE</strong>';
+  const line   = `<div class="therm-sm therm-center" style="color:var(--accent);font-weight:700;margin-top:2px">👤 Vendeur : ${sale.vendeur_nom}</div>`;
+  return html.includes(anchor) ? html.replace(anchor, anchor + '</div>' + line + '<div>') : html + line;
+};
+
+// ── Patch buildEscPos — ligne Vendeur dans ticket BLE ────────
+const _origBuildEscPosV = typeof buildEscPos === 'function' ? buildEscPos : null;
 buildEscPos = function(sale, m, cfg) {
-  // On va injecter la ligne vendeur en post-traitement
-  // Construire d'abord le ticket normal
-  const data = _origBuildEscPos2(sale, m, cfg);
+  const data = _origBuildEscPosV ? _origBuildEscPosV(sale, m, cfg) : new Uint8Array();
   if (!sale.vendeur_nom) return data;
 
-  // Insérer "Vendeur: [nom]" après l'en-tête (après le premier séparateur)
-  // On reconstruit avec la ligne vendeur intégrée
-  const ESC = 0x1B, GS = 0x1D, LF = 0x0A;
-  const vendeurLine = Array.from(escEncode('Vendeur : ' + sale.vendeur_nom.slice(0, 28)));
-
-  // Find the first separator (0x1B 0x61 after header) by pattern
-  // Simpler: rebuild vendeur header insertion at known position
-  // We'll prepend to items section — inject before GS 0x56 (cut) is at the end
-  // Strategy: insert right after N° and date lines by rebuilding from scratch
-  // Actually easiest: insert a small extra block right before the items separator
-
-  // Build vendeur block: center-aligned italic line
+  const ESC = 0x1B, LF = 0x0A;
+  const label = 'Vendeur : ' + sale.vendeur_nom.slice(0, 26);
   const vBlock = [
-    ESC, 0x61, 0x01,           // center
-    ESC, 0x45, 0x01,           // bold ON
-    ...vendeurLine, LF,
-    ESC, 0x45, 0x00,           // bold OFF
-    ESC, 0x61, 0x00,           // left
+    ESC, 0x61, 0x01,                          // centrer
+    ESC, 0x45, 0x01,                          // gras
+    ...Array.from(escEncode(label)), LF,
+    ESC, 0x45, 0x00,                          // gras off
+    ESC, 0x61, 0x00,                          // gauche
   ];
 
-  // Find position to insert (after date/num block, before items)
-  // Simple: remove last 4 bytes (cut command), append vendor block, re-add cut
+  // Insérer juste avant les 4 derniers bytes (commande coupe GS V)
   const arr = Array.from(data);
-  const mainBody = arr.slice(0, arr.length - 4);
-  const cutCmd   = arr.slice(arr.length - 4);
+  const body = arr.slice(0, arr.length - 4);
+  const cut  = arr.slice(arr.length - 4);
 
-  // Find first 0x1D 0x56 (cut) backwards = our cutCmd
-  // Just re-insert vendeur block right after the separator that precedes items
-  // For simplicity, insert it early in the stream after the header block
-  // We'll add it after byte index ~100 (past the header center block)
-
-  // Find the second 0x1B 0x61 0x01 (center align) which marks the start of "TICKET DE CAISSE"
+  // Trouver le 2e séparateur (après en-tête: commerce/date)
+  // Chercher: LF 0x1B 0x61 0x01 = début section centrée après séparateur
   let insertAt = -1;
-  for (let i = 50; i < mainBody.length - 10; i++) {
-    // Look for the separator (0x1B 0x61 0x00 = left align, following the date sm())
-    if (mainBody[i] === 0x1B && mainBody[i+1] === 0x61 && mainBody[i+2] === 0x00 &&
-        mainBody[i-3] === LF) {
-      insertAt = i + 3; // after ESC a 0x00 + any subsequent bytes
-      // Find next LF as end of current block
-      while (insertAt < mainBody.length && mainBody[insertAt] !== 0x1B) insertAt++;
-      break;
+  let sepCount = 0;
+  for (let i = 1; i < body.length - 3; i++) {
+    if (body[i-1] === LF && body[i] === 0x1B && body[i+1] === 0x61 && body[i+2] === 0x00) {
+      sepCount++;
+      if (sepCount === 2) { insertAt = i; break; }
     }
   }
+  if (insertAt < 0) insertAt = Math.min(80, body.length);
 
-  if (insertAt > 0) {
-    const result = [
-      ...mainBody.slice(0, insertAt),
-      ...vBlock,
-      ...mainBody.slice(insertAt),
-      ...cutCmd,
-    ];
-    return new Uint8Array(result);
-  }
-  return data;
+  return new Uint8Array([...body.slice(0, insertAt), ...vBlock, ...body.slice(insertAt), ...cut]);
 };
 
-// ── Patch buildThermalInvoice pour afficher vendeur ──────────
-const _origBuildThermal = buildThermalInvoice;
-buildThermalInvoice = function(sale, m, cfg, num, ds, dev, waNum, fmt) {
-  let html = _origBuildThermal(sale, m, cfg, num, ds, dev, waNum, fmt);
-  if (!sale.vendeur_nom) return html;
-  // Injecter ligne vendeur après le numéro de ticket
-  const anchor = `<div class="therm-center">${'<strong>TICKET DE CAISSE</strong>'}</div>`;
-  const vendeurLine = `<div class="therm-sm therm-center" style="color:var(--accent);font-weight:700">👤 Vendeur : ${sale.vendeur_nom}</div>`;
-  return html.replace(anchor, anchor + vendeurLine);
-};
-
-// ── Init Vendeur au démarrage ─────────────────────────────────
+// ── Init au démarrage ────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   setTimeout(() => Vendeur.init(), 900);
 });
+
 
 
 // --- FINAL INIT ---
