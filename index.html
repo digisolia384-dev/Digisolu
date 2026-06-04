@@ -2534,6 +2534,77 @@ alter table payments  enable row level security;</pre>
         </div>
       </div>
 
+      <!-- ══ RÈGLES FIRESTORE + TEST COMMANDES ══ -->
+      <div class="adm-card" style="margin-bottom:20px;border-color:rgba(46,204,113,0.3)">
+        <div class="adm-card-hdr" style="background:rgba(46,204,113,.05)">
+          <h3>📡 Commandes Multi-Appareils — Firestore</h3>
+          <span style="font-size:.72rem;color:#64748B">Configuration requise pour vendeur → caissière</span>
+        </div>
+        <div class="adm-card-body" style="padding:20px">
+
+          <p style="font-size:.82rem;color:#94A3B8;margin-bottom:16px">
+            Pour que les commandes du vendeur arrivent en temps réel sur la tablette de la caissière,
+            la collection <strong style="color:#2ECC71">commandes</strong> doit être autorisée dans les règles Firestore.
+          </p>
+
+          <!-- Étape 1: Tester -->
+          <div style="background:#0A0E16;border:1px solid rgba(46,204,113,.2);border-radius:8px;padding:14px;margin-bottom:14px">
+            <div style="font-size:.78rem;font-weight:700;color:#2ECC71;margin-bottom:8px">✅ ÉTAPE 1 — Tester la connexion</div>
+            <button onclick="Vendeur.testFirestoreCommandes()"
+              style="background:linear-gradient(135deg,#2ECC71,#27AE60);color:#fff;border:none;border-radius:7px;padding:10px 20px;cursor:pointer;font-weight:700;font-size:.85rem">
+              🧪 Tester Firestore "commandes"
+            </button>
+            <p style="font-size:.72rem;color:#64748B;margin-top:8px">Si ❌ Permission refusée → passez à l'étape 2.</p>
+          </div>
+
+          <!-- Étape 2: Règles -->
+          <div style="background:#0A0E16;border:1px solid rgba(232,115,12,.2);border-radius:8px;padding:14px;margin-bottom:14px">
+            <div style="font-size:.78rem;font-weight:700;color:#E8730C;margin-bottom:8px">⚙️ ÉTAPE 2 — Règles Firestore à copier-coller</div>
+            <p style="font-size:.72rem;color:#64748B;margin-bottom:8px">
+              Dans <strong>Firebase Console → Firestore Database → Règles</strong>, remplacez par :
+            </p>
+            <div style="background:#000;border-radius:6px;padding:12px;font-family:monospace;font-size:.78rem;color:#A3E635;position:relative">
+              <pre style="margin:0;white-space:pre-wrap">rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Collections principales (marchands authentifiés)
+    match /{col}/{id} {
+      allow read, write: if true;
+    }
+  }
+}</pre>
+              <button onclick="navigator.clipboard?.writeText(document.querySelector('#commandes-rules-pre')?.textContent || '').then(()=>showToast('✅ Règles copiées','success'))"
+                id="copy-rules-btn"
+                style="position:absolute;top:8px;right:8px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);color:#fff;border-radius:5px;padding:4px 8px;cursor:pointer;font-size:.7rem">
+                📋 Copier
+              </button>
+            </div>
+            <p style="font-size:.7rem;color:#475569;margin-top:8px">⚠️ Ces règles sont ouvertes. Pour la production, utilisez des règles basées sur l'authentification.</p>
+          </div>
+
+          <!-- Étape 3: Vérifier -->
+          <div style="background:#0A0E16;border:1px solid rgba(59,130,246,.2);border-radius:8px;padding:14px">
+            <div style="font-size:.78rem;font-weight:700;color:#3B82F6;margin-bottom:8px">🔄 ÉTAPE 3 — Vérifier après publication des règles</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button onclick="Vendeur.testFirestoreCommandes()"
+                style="background:rgba(59,130,246,.15);color:#3B82F6;border:1px solid rgba(59,130,246,.3);border-radius:7px;padding:8px 16px;cursor:pointer;font-weight:700;font-size:.82rem">
+                🧪 Re-tester
+              </button>
+              <button onclick="if(Auth.current())Vendeur._startFirebaseListener(Auth.current().id)"
+                style="background:rgba(46,204,113,.1);color:#2ECC71;border:1px solid rgba(46,204,113,.3);border-radius:7px;padding:8px 16px;cursor:pointer;font-weight:700;font-size:.82rem">
+                📡 Relancer le listener
+              </button>
+              <button onclick="Vendeur.showCommandesModal()"
+                style="background:rgba(232,115,12,.1);color:#E8730C;border:1px solid rgba(232,115,12,.3);border-radius:7px;padding:8px 16px;cursor:pointer;font-weight:700;font-size:.82rem">
+                📋 Voir commandes
+              </button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
       <!-- Infos DB -->
       <div class="adm-card">
         <div class="adm-card-hdr"><h3>📊 État de la base de données locale</h3><button class="btn-g sm" onclick="renderAdminDeveloper()">🔄 Actualiser</button></div>
@@ -7148,8 +7219,7 @@ DS_Premium.dailyGoal = {
   set(mid, data) { localStorage.setItem('ds_goal_'+mid, JSON.stringify(data)); },
   render() {
     const m = Auth.current(); if (!m) return;
-    const dev = getConfig()?.devise || 'FCFA';
-    const goal = this.get(m.id);
+    const goal = DS_Premium.dailyGoal.get(m.id);
     const today = new Date().toLocaleDateString('fr-FR');
     const todaySales = DB.forM('sales', m.id)
       .filter(s => new Date(s.created_at).toLocaleDateString('fr-FR') === today && s.statut !== 'cancelled')
@@ -9925,13 +9995,46 @@ const Vendeur = {
 
   // ── Sauvegarder une commande dans Firestore ──────────────
   async _fbSaveCommande(cmd) {
-    if (!FB.ready()) return false;
+    if (!FB.ready()) {
+      console.warn('[Vendeur] Firebase non prêt — commande locale seulement');
+      return false;
+    }
     try {
-      await window._fbDb.collection('commandes').doc(cmd.id).set(cmd);
+      await window._fbDb.collection('commandes').doc(cmd.id).set({
+        ...cmd,
+        _ts: new Date().toISOString(),
+      });
+      console.log('[Vendeur] ✅ Commande écrite dans Firestore:', cmd.id);
       return true;
     } catch(e) {
-      console.warn('[Vendeur] Firestore write:', e.message);
+      if (e.code === 'permission-denied') {
+        console.error('[Vendeur] PERMISSION: ajoutez la collection commandes dans Firestore rules');
+        showToast('❌ Règles Firestore : autorisez la collection "commandes"', 'error');
+      } else {
+        console.warn('[Vendeur] Firestore write error:', e.code, e.message);
+      }
       return false;
+    }
+  },
+
+  // ── Test de connectivité Firestore pour commandes ─────────
+  async testFirestoreCommandes() {
+    if (!FB.ready()) {
+      showToast('❌ Firebase non configuré', 'error'); return;
+    }
+    try {
+      const testDoc = { test: true, at: new Date().toISOString(), merchant_id: 'test' };
+      await window._fbDb.collection('commandes').doc('_test_').set(testDoc);
+      await window._fbDb.collection('commandes').doc('_test_').delete();
+      showToast('✅ Firestore "commandes" : lecture/écriture OK !', 'success');
+      console.log('[Vendeur] ✅ Test Firestore commandes OK');
+    } catch(e) {
+      if (e.code === 'permission-denied') {
+        showToast('❌ Permission refusée — voir console pour les règles', 'error');
+        console.error('[Vendeur] PERMISSION: voir panneau Admin Dev pour les regles Firestore');
+      } else {
+        showToast('❌ Erreur Firestore: ' + e.message, 'error');
+      }
     }
   },
 
@@ -9961,14 +10064,16 @@ const Vendeur = {
       this._fbUnsub = window._fbDb
         .collection('commandes')
         .where('merchant_id', '==', mid)
-        .where('statut', 'in', ['pending', 'accepted'])
-        .orderBy('sent_at', 'desc')
-        .limit(30)
+        .limit(50)
         .onSnapshot(snap => {
-          const cmds = snap.docs.map(d => ({ ...d.data(), id: d.id }));
+          // Toutes les commandes du marchand — filtrer client-side
+          const allDocs = snap.docs.map(d => ({ ...d.data(), id: d.id }));
+          const cmds = allDocs
+            .filter(c => ['pending','accepted'].includes(c.statut))
+            .sort((a,b) => new Date(b.sent_at) - new Date(a.sent_at));
 
-          // Synchroniser localStorage avec Firestore
-          const local = this._getPending(mid).filter(c => !cmds.find(f => f.id === c.id));
+          // Synchroniser localStorage
+          const local = this._getPending(mid).filter(c => !allDocs.find(f => f.id === c.id));
           const merged = [...cmds, ...local].slice(0, 50);
           this._savePending(mid, merged);
 
@@ -9976,20 +10081,28 @@ const Vendeur = {
             initialized = true;
             cmds.forEach(c => knownIds.add(c.id));
             this._updateUI();
+            console.log('[Vendeur] Firestore ready —', cmds.length, 'commande(s) en attente');
             return;
           }
 
-          // Détecter nouvelles commandes
+          // Détecter les nouvelles commandes (pending non encore vues)
           const newCmds = cmds.filter(c => !knownIds.has(c.id) && c.statut === 'pending');
           newCmds.forEach(cmd => {
             knownIds.add(cmd.id);
+            console.log('[Vendeur] 🔔 Nouvelle commande Firestore:', cmd.id, cmd.vendeur_nom);
             this._onCommandeReceived(cmd);
           });
 
+          // Mettre à jour les IDs connus
+          cmds.forEach(c => knownIds.add(c.id));
           this._updateUI();
         }, err => {
-          console.warn('[Vendeur] onSnapshot error:', err.message);
-          // Fallback polling si onSnapshot échoue
+          console.error('[Vendeur] onSnapshot error:', err.code, err.message);
+          if (err.code === 'permission-denied') {
+            console.error('[Vendeur] PERMISSION: regles Firestore manquantes pour commandes');
+            showToast('⚠️ Règles Firestore : ajoutez la collection "commandes"', 'error');
+          }
+          // Fallback polling local
           if (!this._pollTimer) this._startPolling(mid);
         });
 
