@@ -1687,11 +1687,7 @@ async function _fbSyncAll(data) {
           <button class="btn-p" onclick="confirmerOuverture()">Confirmer l'ouverture</button>
         </div>
       </div>
-    <!-- Bouton commandes reçues (caissière) -->
-    <button id="btn-commandes-recues" onclick="Vendeur.showCommandesModal()"
-      style="position:fixed;bottom:80px;right:16px;background:var(--accent);color:#fff;border:none;border-radius:50%;width:52px;height:52px;font-size:1.3rem;cursor:pointer;box-shadow:0 4px 16px rgba(232,115,12,.5);z-index:900;display:none;align-items:center;justify-content:center">
-      📋<span id="cmd-in-badge" class="commandes-badge" style="display:none">0</span>
-    </button>
+    <!-- btn-commandes-recues moved to end of body -->
 
     </div>
 
@@ -10328,14 +10324,26 @@ const Vendeur = {
     const cmds    = this._getPending(m.id);
     const pending = cmds.filter(c => c.statut === 'pending').length;
 
+    // Bouton flottant
     const btn = document.getElementById('btn-commandes-recues');
-    if (btn) btn.style.display = pending > 0 ? 'flex' : 'none';
+    if (btn) {
+      btn.style.display = pending > 0 ? 'flex' : 'none';
+    }
 
+    // Badge sur le bouton flottant
     const badge = document.getElementById('cmd-in-badge');
     if (badge) {
       badge.textContent = pending;
       badge.style.display = pending > 0 ? 'flex' : 'none';
     }
+
+    // Indicateur topbar (visible partout, toutes pages)
+    const topbar = document.getElementById('cmd-topbar-indicator');
+    if (topbar) {
+      topbar.style.display = pending > 0 ? 'flex' : 'none';
+    }
+    const topbarCount = document.getElementById('cmd-topbar-count');
+    if (topbarCount) topbarCount.textContent = pending;
   },
 
   _onCommandeReceived(cmd) {
@@ -11019,6 +11027,23 @@ document.addEventListener('DOMContentLoaded', async () => {  console.log('🚀 D
   if (typeof renderCart !== 'undefined') renderCart();
 });
 </script>
+
+  <!-- ══ BOUTON FLOTTANT COMMANDES CAISSIÈRE ══ -->
+  <!-- Position fixe z-index élevé, toujours visible au-dessus de tout -->
+  <button id="btn-commandes-recues"
+    onclick="Vendeur.showCommandesModal()"
+    style="position:fixed;bottom:80px;right:16px;background:linear-gradient(135deg,var(--accent),#BF5A00);color:#fff;border:none;border-radius:50%;width:56px;height:56px;font-size:1.4rem;cursor:pointer;box-shadow:0 4px 20px rgba(232,115,12,.6);z-index:99990;display:none;align-items:center;justify-content:center;flex-direction:column;gap:2px;transition:transform .2s">
+    📋
+    <span id="cmd-in-badge"
+      style="position:absolute;top:-2px;right:-2px;background:#E74C3C;color:#fff;border-radius:50%;min-width:20px;height:20px;font-size:.65rem;display:none;align-items:center;justify-content:center;font-weight:800;border:2px solid var(--bg)">0</span>
+  </button>
+
+  <!-- Indicateur barre du haut (topbar) -->
+  <div id="cmd-topbar-indicator"
+    onclick="Vendeur.showCommandesModal()"
+    style="position:fixed;top:0;left:50%;transform:translateX(-50%);background:var(--accent);color:#fff;padding:4px 16px;border-radius:0 0 10px 10px;font-size:.75rem;font-weight:700;cursor:pointer;z-index:99991;display:none;align-items:center;gap:6px;box-shadow:0 2px 10px rgba(232,115,12,.4)">
+    📋 <span id="cmd-topbar-count">0</span> commande(s) en attente
+  </div>
 
 </body>
 </html>
